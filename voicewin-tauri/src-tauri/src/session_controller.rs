@@ -370,9 +370,14 @@ impl SessionController {
                                 let (rms_out, peak_out) = (guard.smoothed_rms, guard.smoothed_peak);
                                 drop(guard);
 
+                                // The level callback is an `Fn`, so we must not move out of
+                                // captured values. Clone handles for the async emit task.
+                                let controller2 = controller.clone();
+                                let app_handle2 = app_handle.clone();
+
                                 tauri::async_runtime::spawn(async move {
-                                    controller
-                                        .emit_mic_level(&app_handle, rms_out, peak_out)
+                                    controller2
+                                        .emit_mic_level(&app_handle2, rms_out, peak_out)
                                         .await;
                                 });
                             }
