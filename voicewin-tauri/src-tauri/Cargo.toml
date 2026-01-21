@@ -1,0 +1,39 @@
+[package]
+name = "voicewin-tauri"
+version = "0.1.0"
+description = "VoiceWin (Tauri)"
+authors = ["VoiceWin"]
+edition = "2021"
+license = "GPL-3.0-only"
+publish = false
+
+[lib]
+name = "voicewin_tauri"
+crate-type = ["cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2" }
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = ["tray-icon", "protocol-asset", "image-png", "image-ico"] }
+tauri-plugin-log = "2"
+tauri-plugin-store = "2"
+tauri-plugin-dialog = "2"
+tokio = { version = "1", features = ["sync", "time"] }
+voicewin-appcore = { path = "../../voicewin-appcore" }
+voicewin-core = { path = "../../voicewin-core" }
+voicewin-engine = { path = "../../voicewin-engine" }
+voicewin-platform = { path = "../../voicewin-platform" }
+voicewin-runtime = { path = "../../voicewin-runtime" }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-single-instance = "2"
+tauri-plugin-global-shortcut = "2"
+
+# This crate is intentionally kept out of the Rust workspace.
+# Adding an empty workspace table avoids Cargo "workspace" errors
+# when running commands from within this directory.
+[workspace]

@@ -1,0 +1,32 @@
+# Rust
+/target/
+**/target/
+
+# Node / frontend
+**/node_modules/
+**/dist/
+**/.vite/
+**/.turbo/
+
+# Tauri
+**/src-tauri/target/
+
+# Bun
+**/.bun/
+
+# Logs
+*.log
+
+# OS/editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key

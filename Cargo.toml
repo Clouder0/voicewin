@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "voicewin-core",
+    "voicewin-providers",
+    "voicewin-cli", "voicewin-engine", "voicewin-runtime", "voicewin-platform", "voicewin-gui", "voicewin-app", "voicewin-audio", "voicewin-appcore",
+]
+resolver = "2"

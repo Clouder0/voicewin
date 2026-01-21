@@ -1,0 +1,14 @@
+[package]
+name = "voicewin-cli"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+publish = false
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+voicewin-core = { path = "../voicewin-core" }
+voicewin-engine = { path = "../voicewin-engine" }
+voicewin-providers = { path = "../voicewin-providers" }

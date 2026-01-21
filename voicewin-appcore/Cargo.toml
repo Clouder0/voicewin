@@ -1,0 +1,20 @@
+[package]
+name = "voicewin-appcore"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+publish = false
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+voicewin-core = { path = "../voicewin-core" }
+voicewin-engine = { path = "../voicewin-engine" }
+voicewin-platform = { path = "../voicewin-platform" }
+voicewin-runtime = { path = "../voicewin-runtime" }
+voicewin-audio = { path = "../voicewin-audio" }
+
+[dev-dependencies]
+tempfile = "3"
+wiremock = "0.6"

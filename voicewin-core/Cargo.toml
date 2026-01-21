@@ -1,0 +1,13 @@
+[package]
+name = "voicewin-core"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+publish = false
+autobins = false
+
+[dependencies]
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }

@@ -1,0 +1,22 @@
+[package]
+name = "voicewin-runtime"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+publish = false
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tempfile = "3"
+keyring = "3.6.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+whisper-rs = "0.13.2"
+sha2 = "0.10"
+voicewin-core = { path = "../voicewin-core" }
+voicewin-engine = { path = "../voicewin-engine" }
+voicewin-platform = { path = "../voicewin-platform" }
+voicewin-providers = { path = "../voicewin-providers" }

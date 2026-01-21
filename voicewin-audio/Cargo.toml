@@ -1,0 +1,15 @@
+[package]
+name = "voicewin-audio"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+publish = false
+
+[dependencies]
+anyhow = "1"
+cpal = "0.16.0"
+rubato = "0.16.2"
+thiserror = "2"
+
+[dev-dependencies]
+approx = "0.5"
