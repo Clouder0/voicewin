@@ -2,6 +2,7 @@
 //
 // We keep them behind `cfg(windows)` so the workspace builds cleanly on Linux.
 
+#[path = "windows_foreground.rs"]
 mod windows_foreground;
 
 use voicewin_core::types::{AppIdentity, InsertMode};
@@ -9,6 +10,7 @@ use voicewin_engine::traits::{AppContextProvider, ContextSnapshot, Inserter};
 
 use clipboard_win::get_clipboard_string;
 
+#[path = "windows_insert.rs"]
 mod windows_insert;
 
 #[derive(Debug, Default)]
