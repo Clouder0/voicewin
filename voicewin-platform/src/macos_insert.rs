@@ -12,7 +12,6 @@
 use std::thread;
 use std::time::Duration;
 
-use core_foundation::array::CFIndex;
 use core_foundation::base::TCFType;
 use core_foundation::dictionary::CFDictionary;
 use core_foundation::string::CFString;
@@ -20,8 +19,8 @@ use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{msg_send, ClassType};
-use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardType};
+use objc2::{msg_send, runtime::ProtocolObject};
+use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardType, NSPasteboardWriting};
 use objc2_foundation::{NSArray, NSData, NSString};
 
 use voicewin_core::types::InsertMode;
@@ -108,17 +107,24 @@ fn restore_pasteboard(pasteboard: &NSPasteboard, snapshot: &[PasteboardItemSnaps
         let pb_item = unsafe { NSPasteboardItem::new() };
 
         for (ty, bytes) in &item.types {
+            // NSPasteboardType is a typedef of NSString.
             let ns_ty = NSString::from_str(ty);
             let ns_data = unsafe { NSData::from_vec(bytes.clone()) };
-            let _ok: bool = unsafe { pb_item.setData_forType(&ns_data, NSPasteboardType::from(ns_ty)) };
+            let _ok: bool = unsafe { pb_item.setData_forType(&ns_data, &ns_ty) };
         }
 
         items.push(pb_item);
     }
 
     // Write all items back.
-    let nsarray = NSArray::from_vec(items);
-    let _ = unsafe { pasteboard.writeObjects(&nsarray) };
+    // NSPasteboard expects NSArray<id<NSPasteboardWriting>>.
+    // NSPasteboardItem conforms to NSPasteboardWriting, so we can erase the item
+    // array to the protocol array.
+    let objects: Retained<NSArray<ProtocolObject<dyn NSPasteboardWriting>>> = unsafe {
+        // SAFETY: Each NSPasteboardItem implements NSPasteboardWriting.
+        std::mem::transmute(nsarray)
+    };
+    let _ = pasteboard.writeObjects(&objects);
 }
 
 fn post_cmd_v() -> anyhow::Result<()> {

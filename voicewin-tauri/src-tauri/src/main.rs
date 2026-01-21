@@ -108,7 +108,10 @@ async fn build_service(app: &tauri::AppHandle) -> anyhow::Result<AppService> {
     #[cfg(windows)]
     let ctx: Arc<dyn voicewin_engine::traits::AppContextProvider> =
         Arc::new(voicewin_platform::windows::WindowsContextProvider::default());
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    let ctx: Arc<dyn voicewin_engine::traits::AppContextProvider> =
+        Arc::new(voicewin_platform::macos::MacosContextProvider::default());
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     let ctx: Arc<dyn voicewin_engine::traits::AppContextProvider> = voicewin_platform::test::TestContextProvider::new(
         voicewin_core::types::AppIdentity::new().with_process_name("linux"),
         Default::default(),
@@ -118,7 +121,10 @@ async fn build_service(app: &tauri::AppHandle) -> anyhow::Result<AppService> {
     #[cfg(windows)]
     let inserter: Arc<dyn voicewin_engine::traits::Inserter> =
         Arc::new(voicewin_platform::windows::WindowsInserter::default());
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    let inserter: Arc<dyn voicewin_engine::traits::Inserter> =
+        Arc::new(voicewin_platform::macos::MacosInserter::default());
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     let inserter: Arc<dyn voicewin_engine::traits::Inserter> = Arc::new(voicewin_platform::test::StdoutInserter);
 
     Ok(AppService::new(config_path, ctx, inserter))
