@@ -4,7 +4,7 @@
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 
-use voicewin_core::types::{AppIdentity, ProcessName, WindowTitle};
+use voicewin_core::types::{AppIdentity, WindowTitle};
 use windows::Win32::Foundation::{CloseHandle, HWND};
 use windows::Win32::System::ProcessStatus::K32GetModuleFileNameExW;
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
@@ -15,7 +15,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 pub fn get_foreground_app_identity() -> anyhow::Result<AppIdentity> {
     unsafe {
         let hwnd: HWND = GetForegroundWindow();
-        if hwnd.0 == 0 {
+        if hwnd.0.is_null() {
             return Ok(AppIdentity::new());
         }
 
@@ -70,7 +70,7 @@ fn get_process_exe_path(pid: u32) -> anyhow::Result<String> {
         // K32GetModuleFileNameExW requires PROCESS_QUERY_INFORMATION | PROCESS_VM_READ normally,
         // but on modern Windows PROCESS_QUERY_LIMITED_INFORMATION is often sufficient.
         // If it fails, we still return an error.
-        let len = K32GetModuleFileNameExW(handle, None, &mut buf) as usize;
+        let len = K32GetModuleFileNameExW(Some(handle), None, &mut buf) as usize;
         let _ = CloseHandle(handle);
 
         if len == 0 {

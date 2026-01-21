@@ -13,6 +13,7 @@ use std::thread;
 use std::time::Duration;
 
 use clipboard_win::{get_clipboard_string, set_clipboard_string};
+use enigo::Keyboard;
 use voicewin_core::types::InsertMode;
 
 fn send_paste_ctrl_v(enigo: &mut enigo::Enigo) -> anyhow::Result<()> {
