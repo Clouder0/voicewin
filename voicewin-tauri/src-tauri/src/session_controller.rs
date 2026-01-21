@@ -255,8 +255,11 @@ impl SessionController {
             inner.session_id
         };
         {
-            let controller = self.clone();
-            let app_handle = app.clone();
+                    let controller = self.clone();
+                    let app_handle = app.clone();
+                    let _controller_for_cb = controller.clone();
+                    let _app_handle_for_cb = app_handle.clone();
+
             tauri::async_runtime::spawn(async move {
                 controller
                     .hide_overlay_if_session_matches(&app_handle, session_id)
@@ -336,6 +339,8 @@ impl SessionController {
                         .clone()
                         .start_recording_with_level_callback({
                             let level_state = level_state.clone();
+                            let controller = controller.clone();
+                            let app_handle = app_handle.clone();
                             move |chunk: &[f32]| {
                                 let now = Instant::now();
 
@@ -365,8 +370,6 @@ impl SessionController {
                                 let (rms_out, peak_out) = (guard.smoothed_rms, guard.smoothed_peak);
                                 drop(guard);
 
-                                let controller = controller.clone();
-                                let app_handle = app_handle.clone();
                                 tauri::async_runtime::spawn(async move {
                                     controller
                                         .emit_mic_level(&app_handle, rms_out, peak_out)
