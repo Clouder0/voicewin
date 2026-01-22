@@ -1,4 +1,4 @@
-name: VoiceWin Windows Portable
+name: VoiceWin Windows Installer
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ on:
       - 'v*'
 
 jobs:
-  build-windows-portable:
+  build-windows-installer:
     runs-on: windows-latest
 
     steps:
@@ -58,54 +58,13 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli --locked
 
-      - name: Build Tauri app (no bundle)
+      - name: Build Tauri app (NSIS installer)
         working-directory: voicewin-tauri
-        run: cargo tauri build --no-bundle
+        run: cargo tauri build
 
-      - name: Assemble portable folder
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $project = Join-Path $env:GITHUB_WORKSPACE 'voicewin-tauri'
-          $exeDir = Join-Path $project 'src-tauri/target/release'
-
-          # Find the first exe in release that is not a build-script.
-          $exe = Get-ChildItem -Path $exeDir -Filter *.exe | Where-Object { $_.Name -notmatch 'build-script' } | Select-Object -First 1
-          if (-not $exe) {
-            throw "No .exe found in $exeDir"
-          }
-
-          $outRoot = Join-Path $env:GITHUB_WORKSPACE 'portable/VoiceWin'
-          New-Item -ItemType Directory -Force -Path $outRoot | Out-Null
-
-          # Copy executable + adjacent DLLs (portable runtime bits).
-          Copy-Item -Force $exe.FullName (Join-Path $outRoot 'VoiceWin.exe')
-          Get-ChildItem -Path $exeDir -Filter *.dll | ForEach-Object { Copy-Item -Force $_.FullName $outRoot }
-
-          # Copy bootstrap model in the expected relative location.
-          $modelsDir = Join-Path $outRoot 'models'
-          New-Item -ItemType Directory -Force -Path $modelsDir | Out-Null
-
-          $bootstrap = Join-Path $project 'src-tauri/resources/models/bootstrap.gguf'
-          if (-not (Test-Path $bootstrap)) {
-            throw "Missing bootstrap model at $bootstrap"
-          }
-          Copy-Item -Force $bootstrap (Join-Path $modelsDir 'bootstrap.gguf')
-
-          # Optional fallback path.
-          $fallback = Join-Path $outRoot 'resources/models'
-          New-Item -ItemType Directory -Force -Path $fallback | Out-Null
-          Copy-Item -Force $bootstrap (Join-Path $fallback 'bootstrap.gguf')
-
-          # Zip it (simple name).
-          $zipPath = Join-Path $env:GITHUB_WORKSPACE 'VoiceWin-windows-portable.zip'
-          if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
-          Compress-Archive -Path (Join-Path $env:GITHUB_WORKSPACE 'portable/*') -DestinationPath $zipPath
-
-      - name: Upload portable zip
+      - name: Upload NSIS installer
         uses: actions/upload-artifact@v4
         with:
-          name: VoiceWin-windows-portable
-          path: VoiceWin-windows-portable.zip
+          name: VoiceWin-windows-installer
+          path: voicewin-tauri/src-tauri/target/release/bundle/nsis/*-setup.exe
           if-no-files-found: error
