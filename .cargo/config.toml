@@ -1,0 +1,4 @@
+# Ensure the produced Windows binaries do not depend on the MSVC redistributable.
+# This avoids 0xc000007b on machines missing VC++ runtime.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
