@@ -20,7 +20,9 @@ use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{msg_send, runtime::ProtocolObject};
-use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardType, NSPasteboardWriting};
+use objc2_app_kit::{
+    NSPasteboard, NSPasteboardItem, NSPasteboardType, NSPasteboardTypeString, NSPasteboardWriting,
+};
 use objc2_foundation::{NSArray, NSData, NSString};
 
 use voicewin_core::types::InsertMode;
@@ -47,8 +49,11 @@ struct PasteboardItemSnapshot {
     types: Vec<(String, Vec<u8>)>,
 }
 
+const SNAPSHOT_MAX_TOTAL_BYTES: usize = 8 * 1024 * 1024;
+
 fn snapshot_pasteboard(pasteboard: &NSPasteboard) -> Vec<PasteboardItemSnapshot> {
     let mut out = Vec::new();
+    let mut total = 0usize;
 
     // `pasteboardItems` may be nil.
     let items: Option<Retained<NSArray<NSPasteboardItem>>> = unsafe { pasteboard.pasteboardItems() };
@@ -78,9 +83,15 @@ fn snapshot_pasteboard(pasteboard: &NSPasteboard) -> Vec<PasteboardItemSnapshot>
                 continue;
             }
 
+            if total.saturating_add(len) > SNAPSHOT_MAX_TOTAL_BYTES {
+                // Too large; don't attempt "full" restoration.
+                return Vec::new();
+            }
+
             // SAFETY: NSData guarantees `bytes` is valid for `length` bytes.
             let slice = unsafe { std::slice::from_raw_parts(bytes.cast::<u8>(), len) };
             entry.types.push((ty_str, slice.to_vec()));
+            total += len;
         }
 
         if !entry.types.is_empty() {
@@ -109,7 +120,7 @@ fn restore_pasteboard(pasteboard: &NSPasteboard, snapshot: &[PasteboardItemSnaps
         for (ty, bytes) in &item.types {
             // NSPasteboardType is a typedef of NSString.
             let ns_ty = NSString::from_str(ty);
-            let ns_data = unsafe { NSData::from_vec(bytes.clone()) };
+            let ns_data = NSData::with_bytes(bytes);
             let _ok: bool = unsafe { pb_item.setData_forType(&ns_data, &ns_ty) };
         }
 
@@ -118,12 +129,14 @@ fn restore_pasteboard(pasteboard: &NSPasteboard, snapshot: &[PasteboardItemSnaps
 
     // Write all items back.
     // NSPasteboard expects NSArray<id<NSPasteboardWriting>>.
-    // NSPasteboardItem conforms to NSPasteboardWriting, so we can erase the item
-    // array to the protocol array.
-    let objects: Retained<NSArray<ProtocolObject<dyn NSPasteboardWriting>>> = unsafe {
-        // SAFETY: Each NSPasteboardItem implements NSPasteboardWriting.
-        std::mem::transmute(nsarray)
-    };
+    let mut as_proto: Vec<Retained<ProtocolObject<dyn NSPasteboardWriting>>> =
+        Vec::with_capacity(items.len());
+
+    for it in items {
+        as_proto.push(ProtocolObject::from_retained(it));
+    }
+
+    let objects = NSArray::from_retained_slice(&as_proto);
     let _ = pasteboard.writeObjects(&objects);
 }
 
@@ -191,6 +204,8 @@ pub fn paste_text_via_clipboard(text: &str, mode: InsertMode) -> anyhow::Result<
 
     let pasteboard = NSPasteboard::generalPasteboard();
 
+    let original_change = pasteboard.changeCount();
+
     // Snapshot full pasteboard.
     let snapshot = snapshot_pasteboard(&pasteboard);
 
@@ -200,7 +215,8 @@ pub fn paste_text_via_clipboard(text: &str, mode: InsertMode) -> anyhow::Result<
     }
 
     let ns_text = NSString::from_str(text);
-    let _ = unsafe { pasteboard.setString_forType(&ns_text, NSPasteboardType::string()) };
+    let _ = pasteboard.setString_forType(&ns_text, NSPasteboardTypeString);
+    let after_write_change = pasteboard.changeCount();
 
     // Small delay to ensure the target app sees clipboard update.
     thread::sleep(Duration::from_millis(50));
@@ -212,9 +228,13 @@ pub fn paste_text_via_clipboard(text: &str, mode: InsertMode) -> anyhow::Result<
         post_enter()?;
     }
 
-    // Restore pasteboard after a delay.
+    // Restore pasteboard after a delay, but only if the user/app hasn't changed it.
     thread::sleep(Duration::from_millis(1000));
-    restore_pasteboard(&pasteboard, &snapshot);
+
+    let current_change = pasteboard.changeCount();
+    if current_change == after_write_change || current_change == original_change {
+        restore_pasteboard(&pasteboard, &snapshot);
+    }
 
     Ok(())
 }
