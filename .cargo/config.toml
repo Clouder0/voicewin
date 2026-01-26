@@ -2,3 +2,10 @@
 # This avoids 0xc000007b on machines missing VC++ runtime.
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
+
+# whisper-rs-sys builds whisper.cpp via CMake. When we enable `crt-static` for Rust,
+# we must also force CMake projects to use the static MSVC runtime (/MT) or linking
+# fails due to a CRT mismatch (MSVCRT vs LIBCMT).
+[env]
+CMAKE_POLICY_DEFAULT_CMP0091 = "NEW"
+CMAKE_MSVC_RUNTIME_LIBRARY = "MultiThreaded"
