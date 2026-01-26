@@ -5,11 +5,12 @@ use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 
 use voicewin_core::types::{AppIdentity, WindowTitle};
+use windows::core::PWSTR;
 use windows::Win32::Foundation::{CloseHandle, HWND};
 use windows::Win32::System::ProcessStatus::K32GetModuleFileNameExW;
-use windows::Win32::System::ProcessStatus::QueryFullProcessImageNameW;
 use windows::Win32::System::Threading::{
-    OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_INFORMATION,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_NAME_WIN32,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
@@ -76,7 +77,13 @@ fn get_process_exe_path(pid: u32) -> anyhow::Result<String> {
         let mut buf = vec![0u16; 4096];
         let mut size: u32 = buf.len().try_into().unwrap_or(u32::MAX);
 
-        let ok = QueryFullProcessImageNameW(Some(handle), 0, &mut buf, &mut size).is_ok();
+        let ok = QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_WIN32,
+            PWSTR(buf.as_mut_ptr()),
+            &mut size,
+        )
+        .is_ok();
         if ok && size > 0 {
             buf.truncate(size as usize);
             let _ = CloseHandle(handle);
