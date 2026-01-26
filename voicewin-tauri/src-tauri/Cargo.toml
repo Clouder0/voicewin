@@ -28,6 +28,7 @@ reqwest = { version = "0.12", default-features = true, features = ["stream"] }
 futures-util = "0.3"
 sha2 = "0.10"
 window-vibrancy = "0.6"
+voicewin-audio = { path = "../../voicewin-audio" }
 voicewin-appcore = { path = "../../voicewin-appcore" }
 voicewin-core = { path = "../../voicewin-core" }
 voicewin-engine = { path = "../../voicewin-engine" }

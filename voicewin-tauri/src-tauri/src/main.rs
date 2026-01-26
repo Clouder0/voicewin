@@ -23,7 +23,7 @@ struct OverlayMovedPayload {
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 #[cfg(windows)]
-use window_vibrancy::{apply_acrylic, apply_tabbed, Color};
+use window_vibrancy::{apply_acrylic, apply_tabbed};
 
 #[cfg(target_os = "linux")]
 fn load_tray_icon(app: &tauri::AppHandle) -> Option<tauri::image::Image<'static>> {
@@ -960,18 +960,14 @@ fn main() {
             // Apply Acrylic to overlay (best-effort; Windows-only).
             #[cfg(windows)]
             {
-                if let Ok(hwnd) = overlay.hwnd() {
-                    let _ = apply_acrylic(hwnd, Some((0, 0, 0, 0)));
-                }
+                let _ = apply_acrylic(&overlay, Some((0, 0, 0, 0)));
             }
 
             // Apply Mica Alt (tabbed) to the main window (best-effort; Windows-only).
             #[cfg(windows)]
             {
                 if let Some(main_w) = app.get_webview_window("main") {
-                    if let Ok(hwnd) = main_w.hwnd() {
-                        let _ = apply_tabbed(hwnd, None);
-                    }
+                    let _ = apply_tabbed(&main_w, None);
                 }
             }
 

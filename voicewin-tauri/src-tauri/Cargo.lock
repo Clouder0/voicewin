@@ -5470,6 +5470,7 @@ dependencies = [
  "tauri-plugin-store",
  "tokio",
  "voicewin-appcore",
+ "voicewin-audio",
  "voicewin-core",
  "voicewin-engine",
  "voicewin-platform",
