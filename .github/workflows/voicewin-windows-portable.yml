@@ -74,8 +74,20 @@ jobs:
             throw "Could not locate built executable under $releaseDir"
           }
 
-          # dumpbin is provided by the Visual Studio toolchain installed on GitHub-hosted runners.
-          $deps = & dumpbin /DEPENDENTS $exe 2>$null | Out-String
+          # Resolve dumpbin from the VS toolchain.
+          # It is not always on PATH on GitHub-hosted runners unless a dev cmd is initialized.
+          $dumpbin = (Get-Command dumpbin.exe -ErrorAction SilentlyContinue).Source
+          if (-not $dumpbin) {
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            if (Test-Path $vswhere) {
+              $dumpbin = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe | Select-Object -First 1
+            }
+          }
+          if (-not $dumpbin -or -not (Test-Path $dumpbin)) {
+            throw 'dumpbin.exe not found (install Visual Studio C++ tools or run a VS dev cmd before this step)'
+          }
+
+          $deps = & $dumpbin /DEPENDENTS $exe 2>$null | Out-String
           if (-not $deps -or $deps.Trim().Length -eq 0) {
             throw 'dumpbin produced no output (tool missing?)'
           }
