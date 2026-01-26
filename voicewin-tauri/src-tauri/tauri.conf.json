@@ -38,7 +38,7 @@
     "resources": [
       "resources/models/bootstrap.gguf"
     ],
-    "macos": {
+    "macOS": {
       "infoPlist": "Info.plist"
     },
     "windows": {
@@ -59,4 +59,3 @@
     ]
   }
 }
-
