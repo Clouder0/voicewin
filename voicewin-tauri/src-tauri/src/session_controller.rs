@@ -177,6 +177,8 @@ impl SessionController {
         {
             let mut inner = self.inner.lock().await;
 
+            let prev = inner.stage;
+
             // If we're leaving Recording, preserve the final elapsed time so the overlay timer
             // doesn't jump back to 0 immediately.
             if inner.stage == SessionStage::Recording && stage != SessionStage::Recording {
@@ -187,6 +189,10 @@ impl SessionController {
             }
 
             inner.stage = stage;
+
+            if prev != stage {
+                log::info!("session stage: {:?} -> {:?}", prev, stage);
+            }
 
             if stage == SessionStage::Recording {
                 inner.session_id = inner.session_id.wrapping_add(1);

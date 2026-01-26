@@ -113,6 +113,7 @@ export function ModelsPage() {
       >
         {cards.map((m) => {
           const p = progress[m.id];
+          const isDownloading = Boolean(p) || m.downloading;
           const frac = p?.total_bytes ? Math.max(0, Math.min(1, p.downloaded_bytes / p.total_bytes)) : null;
 
           return (
@@ -162,7 +163,7 @@ export function ModelsPage() {
                   >
                     Set Active
                   </button>
-                ) : p ? (
+                ) : isDownloading ? (
                   <button type="button" className="vw-button vw-button--primary" disabled>
                     Downloading…
                   </button>
@@ -174,7 +175,21 @@ export function ModelsPage() {
                       try {
                         const { invoke } = await import('@tauri-apps/api/core');
                         setError(null);
-                        await invoke('download_model', { modelId: m.id });
+                        // Optimistically mark as downloading so the UI updates immediately.
+                        setProgress((prev) => ({
+                          ...prev,
+                          [m.id]: { model_id: m.id, downloaded_bytes: 0, total_bytes: null },
+                        }));
+                        // Fire-and-forget: progress comes via events, completion via done event.
+                        void invoke('download_model', { modelId: m.id }).catch((e) => {
+                          setError(String(e));
+                          setProgress((prev) => {
+                            const next = { ...prev };
+                            delete next[m.id];
+                            return next;
+                          });
+                          void refresh();
+                        });
                       } catch (e) {
                         setError(String(e));
                       }
@@ -188,12 +203,32 @@ export function ModelsPage() {
                   <div className="vw-type-caption">
                     {p.total_bytes ? `${Math.round(frac ? frac * 100 : 0)}%` : `${Math.round(p.downloaded_bytes / (1024 * 1024))} MB`}
                   </div>
+                ) : isDownloading ? (
+                  <div className="vw-type-caption">…</div>
                 ) : null}
               </div>
 
-                {p ? (
-                  <div style={{ height: 2, width: '100%', background: 'var(--stroke-card)', alignSelf: 'end' }}>
-                    <div style={{ height: 2, width: `${Math.round((frac ?? 0) * 100)}%`, background: 'var(--color-accent)' }} />
+                {isDownloading ? (
+                  <div style={{ height: 2, width: '100%', background: 'var(--stroke-card)', alignSelf: 'end', overflow: 'hidden' }}>
+                    {p?.total_bytes ? (
+                      <div
+                        style={{
+                          height: 2,
+                          width: `${Math.round((frac ?? 0) * 100)}%`,
+                          background: 'var(--color-accent)',
+                          transition: 'width 120ms linear',
+                        }}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          height: 2,
+                          width: '35%',
+                          background: 'var(--color-accent)',
+                          animation: 'vw-indeterminate 1.1s ease-in-out infinite',
+                        }}
+                      />
+                    )}
                   </div>
                 ) : null}
             </div>

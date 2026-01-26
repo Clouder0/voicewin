@@ -28,6 +28,15 @@ body {
   background: var(--surface-window);
 }
 
+@keyframes vw-indeterminate {
+  0% {
+    transform: translateX(-60%);
+  }
+  100% {
+    transform: translateX(220%);
+  }
+}
+
 /* Overlay window must stay transparent outside the pill. */
 html.overlayPage,
 body.overlayPage {

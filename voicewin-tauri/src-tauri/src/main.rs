@@ -122,28 +122,67 @@ fn ensure_bootstrap_model(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
     let app_data_dir = app.path().app_data_dir()?;
 
     let dst = voicewin_runtime::models::installed_bootstrap_model_path(&app_data_dir);
+    log::info!("bootstrap model dst: {}", dst.display());
     if dst.exists() {
         // If the file is present but invalid (partial/corrupt), re-copy from bundled resources.
         if voicewin_runtime::models::validate_bootstrap_model(&dst).is_ok() {
+            log::info!("bootstrap model already present + valid");
             return Ok(dst);
+        }
+
+        log::warn!("bootstrap model present but invalid; will re-copy");
+    }
+
+    // Locate the bundled bootstrap model.
+    // Note: `resolve` does not check existence, so we must probe candidate paths.
+    let mut tried = Vec::new();
+    let mut src: Option<PathBuf> = None;
+
+    for rel in [
+        // Most common layout: resources include the file under `models/`.
+        "models/bootstrap.gguf",
+        // If the bundler preserved the `resources/` prefix.
+        "resources/models/bootstrap.gguf",
+    ] {
+        if let Ok(p) = app.path().resolve(rel, tauri::path::BaseDirectory::Resource) {
+            tried.push(p.clone());
+            if p.exists() {
+                src = Some(p);
+                break;
+            }
         }
     }
 
-    let src = app
-        .path()
-        .resolve(
-            "models/bootstrap.gguf",
-            tauri::path::BaseDirectory::Resource,
+    // Extra fallbacks for portable/no-bundle layouts (adjacent to the executable).
+    if src.is_none() {
+        for rel in ["models/bootstrap.gguf", "resources/models/bootstrap.gguf"] {
+            if let Ok(p) = app.path().resolve(rel, tauri::path::BaseDirectory::Executable) {
+                tried.push(p.clone());
+                if p.exists() {
+                    src = Some(p);
+                    break;
+                }
+            }
+        }
+    }
+
+    // If none of the resolved candidates exist, report a detailed error.
+    let src = src.ok_or_else(|| {
+        let tried = tried
+            .into_iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join("; ");
+        anyhow::anyhow!(
+            "could not locate bundled bootstrap model; tried: {tried}"
         )
-        .or_else(|_| {
-            // Fallback: some bundlers keep resources flat.
-            app.path().resolve(
-                "resources/models/bootstrap.gguf",
-                tauri::path::BaseDirectory::Resource,
-            )
-        })?;
+    })?;
+
+    log::info!("bootstrap model src: {}", src.display());
 
     voicewin_runtime::models::atomic_copy(&src, &dst)?;
+
+    log::info!("bootstrap model copied to {}", dst.display());
 
     // Fail fast if the bundled model is missing/corrupt.
     voicewin_runtime::models::validate_bootstrap_model(&dst)?;
@@ -153,6 +192,7 @@ fn ensure_bootstrap_model(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
 
 async fn build_service(app: &tauri::AppHandle) -> anyhow::Result<AppService> {
     let config_path = default_config_path(app)?;
+    log::info!("build_service config_path: {}", config_path.display());
 
     // Ensure the bundled bootstrap model is available on disk.
     // The bootstrap model is required for out-of-box local STT.
@@ -183,6 +223,7 @@ async fn build_service(app: &tauri::AppHandle) -> anyhow::Result<AppService> {
     let inserter: Arc<dyn voicewin_engine::traits::Inserter> =
         Arc::new(voicewin_platform::test::StdoutInserter);
 
+    log::info!("build_service done");
     Ok(AppService::new(config_path, ctx, inserter))
 }
 
@@ -338,6 +379,7 @@ async fn cancel_recording(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<ToggleResult, String> {
+    log::info!("cancel_recording invoked");
     let svc = state
         .service
         .get_or_try_init(|| async { build_service(&app).await })
@@ -352,6 +394,7 @@ async fn toggle_recording(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<ToggleResult, String> {
+    log::info!("toggle_recording invoked");
     let svc = state
         .service
         .get_or_try_init(|| async { build_service(&app).await })
@@ -359,6 +402,13 @@ async fn toggle_recording(
         .map_err(|e| e.to_string())?;
 
     Ok(state.session.toggle_recording(&app, svc.clone()).await)
+}
+
+#[tauri::command]
+async fn get_session_status(
+    state: State<'_, AppState>,
+) -> Result<session_controller::SessionStatusPayload, String> {
+    Ok(state.session.get_status().await)
 }
 
 #[cfg(any(windows, target_os = "macos"))]
@@ -640,6 +690,7 @@ async fn set_active_model(
 #[tauri::command]
 async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<(), String> {
     // NOTE: this uses network access (HuggingFace).
+    log::info!("download_model start: {model_id}");
     let downloading = DOWNLOADING_MODELS.get_or_init(|| {
         std::sync::Mutex::new(std::collections::HashSet::new())
     });
@@ -663,6 +714,8 @@ async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<(), S
             .ok_or_else(|| "unknown model id".to_string())?;
 
         let dst = models_dir.join(&spec.filename);
+        log::info!("download_model dst: {}", dst.display());
+        log::info!("download_model url: {}", spec.url);
         let expected_sha = spec.sha256.to_lowercase();
 
         // Stream download into a temp file.
@@ -682,6 +735,7 @@ async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<(), S
         }
 
         let total = resp.content_length();
+        log::info!("download_model content_length: {:?}", total);
         let mut stream = resp.bytes_stream();
 
         use futures_util::StreamExt;
@@ -763,6 +817,11 @@ async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<(), S
             g.remove(&model_id);
         })
         .map_err(|_| "download lock poisoned".to_string());
+
+    match &result {
+        Ok(()) => log::info!("download_model done: {model_id}"),
+        Err(e) => log::error!("download_model failed: {model_id}: {e}"),
+    }
 
     result
 }
@@ -909,6 +968,7 @@ fn main() {
             set_config,
             toggle_recording,
             cancel_recording,
+            get_session_status,
             #[cfg(any(windows, target_os = "macos"))]
             get_toggle_hotkey,
             #[cfg(any(windows, target_os = "macos"))]

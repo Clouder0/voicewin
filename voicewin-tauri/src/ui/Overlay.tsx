@@ -67,6 +67,7 @@ export function Overlay() {
     async function start() {
       try {
         const { listen } = await import('@tauri-apps/api/event');
+        const { invoke } = await import('@tauri-apps/api/core');
 
         unlistenStatus = await listen<SessionStatusPayload>('voicewin://session_status', (e) => {
           setStatus(e.payload);
@@ -76,6 +77,15 @@ export function Overlay() {
         unlistenLevel = await listen<MicLevelPayload>('voicewin://mic_level', (e) => {
           setLevels(e.payload);
         });
+
+        // Best-effort: fetch current status in case we missed the first emit
+        // (e.g. overlay window is shown before listeners attach).
+        try {
+          const current = await invoke<SessionStatusPayload>('get_session_status');
+          setStatus(current);
+        } catch {
+          // Ignore.
+        }
       } catch {
         // Not running inside Tauri.
       }
