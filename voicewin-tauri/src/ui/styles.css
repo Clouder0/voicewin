@@ -1,256 +1,479 @@
-:root {
-  --bg: #f7f7fb;
-  --fg: #101018;
-  --muted: rgba(16, 16, 24, 0.68);
-  --stroke: rgba(16, 16, 24, 0.12);
-  --stroke-strong: rgba(16, 16, 24, 0.18);
-  --fill: rgba(16, 16, 24, 0.04);
-  --fill-strong: rgba(16, 16, 24, 0.06);
-  --accent: #2b6aff;
-  --accent-weak: rgba(43, 106, 255, 0.12);
-  --shadow: 0 10px 24px rgba(16, 16, 24, 0.12);
-  --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
-  --radius: 12px;
+/*
+VoiceWin UI styles.
+
+Design source of truth:
+- voicewin/design-draft.md (v3.0, FROZEN)
+
+Important:
+- Use design tokens from `tokens.css`.
+- Avoid arbitrary pixel values not explicitly in the spec.
+*/
+
+* {
+  box-sizing: border-box;
 }
 
-/* Overlay */
-.overlayRoot {
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line);
+  font-weight: var(--type-body-weight);
+  color: var(--text-primary);
+  background: var(--surface-window);
+}
+
+/* Overlay window must stay transparent outside the pill. */
+html.overlayPage,
+body.overlayPage {
+  background: transparent;
+}
+
+/* -----------------------------
+   Typography
+----------------------------- */
+
+.vw-type-display {
+  font-family: var(--font-display);
+  font-size: var(--type-display-size);
+  line-height: var(--type-display-line);
+  font-weight: var(--type-display-weight);
+  letter-spacing: var(--type-display-tracking);
+}
+
+.vw-type-title {
+  font-family: var(--font-display);
+  font-size: var(--type-title-size);
+  line-height: var(--type-title-line);
+  font-weight: var(--type-title-weight);
+}
+
+.vw-type-subtitle {
+  font-family: var(--font-body);
+  font-size: var(--type-subtitle-size);
+  line-height: var(--type-subtitle-line);
+  font-weight: var(--type-subtitle-weight);
+}
+
+.vw-type-body {
+  font-family: var(--font-body);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line);
+  font-weight: var(--type-body-weight);
+}
+
+.vw-type-bodyStrong {
+  font-family: var(--font-body);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line);
+  font-weight: var(--type-body-strong-weight);
+}
+
+.vw-type-caption {
+  font-family: var(--font-body);
+  font-size: var(--type-caption-size);
+  line-height: var(--type-caption-line);
+  font-weight: var(--type-caption-weight);
+  color: var(--text-secondary);
+}
+
+.vw-type-mono {
+  font-family: var(--font-mono);
+  font-size: var(--type-mono-size);
+  line-height: var(--type-mono-line);
+  font-weight: var(--type-mono-weight);
+}
+
+/* -----------------------------
+   Primitives
+----------------------------- */
+
+.vw-card {
+  background: var(--surface-card);
+  border: 1px solid var(--stroke-card);
+  border-radius: var(--radius-card);
+}
+
+.vw-button {
+  height: 32px;
+  padding: 0 var(--space-16);
+  border-radius: var(--radius-button);
+  border: 1px solid transparent;
+  font-family: var(--font-body);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line);
+  font-weight: var(--type-body-strong-weight);
+  cursor: pointer;
+  user-select: none;
+  background: transparent;
+  color: var(--text-primary);
+}
+
+.vw-button:active {
+  opacity: 0.8;
+  transform: scale(0.98);
+}
+
+.vw-button--primary {
+  background: var(--color-accent);
+  color: var(--color-accent-text);
+  border-color: transparent;
+}
+
+.vw-button--secondary {
+  background: var(--control-fill);
+  border-color: var(--control-stroke);
+  color: var(--text-primary);
+}
+
+.vw-button--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-primary);
+}
+
+.vw-button--ghost:hover {
+  background: var(--subtle-fill-secondary);
+}
+
+.vw-iconButton {
+  width: var(--hud-button-size);
+  height: var(--hud-button-size);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.vw-input {
+  height: 32px;
+  width: 100%;
+  border-radius: var(--radius-button);
+  border: 1px solid var(--control-stroke);
+  border-bottom-color: var(--control-stroke-strong);
+  background: var(--control-fill);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line);
+  padding: 0 var(--space-12);
+  outline: none;
+}
+
+.vw-input:focus {
+  border-bottom-color: var(--color-accent);
+  border-bottom-width: 2px;
+}
+
+.vw-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--stroke-card);
+  background: var(--layer-fill);
+  border-radius: var(--radius-card);
+  padding: 2px 6px;
+  font-family: var(--font-mono);
+  font-size: var(--type-caption-size);
+  line-height: var(--type-caption-line);
+  color: var(--text-primary);
+}
+
+/* -----------------------------
+   Main Window Shell
+----------------------------- */
+
+.vw-hotkeyButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+}
+
+.vw-hotkeyButton:focus {
+  outline: none;
+}
+
+.vw-hotkeyButton:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-card);
+}
+
+.vw-shell {
+  height: 100vh;
+  display: grid;
+  grid-template-columns: var(--nav-rail-width) 1fr;
+}
+
+.vw-navRail {
+  padding-top: 40px;
+  padding-bottom: var(--space-16);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.vw-navItem {
+  width: var(--nav-item-size);
+  height: var(--nav-item-size);
+  border-radius: var(--radius-card);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  display: grid;
+  place-items: center;
   position: relative;
+  cursor: pointer;
+}
+
+.vw-navItem:hover {
+  background: var(--subtle-fill-secondary);
+}
+
+.vw-navItem[data-active='true'] {
+  background: var(--subtle-fill-tertiary);
+  color: var(--color-accent);
+}
+
+.vw-navItem[data-active='true']::before {
+  content: '';
+  position: absolute;
+  left: -12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: var(--space-16);
+  background: var(--color-accent);
+  border-radius: 999px;
+}
+
+.vw-content {
+  position: relative;
+}
+
+.vw-page {
+  height: 100%;
+}
+
+.vw-pageEnter {
+  animation: vwPageEnter 250ms cubic-bezier(0, 0, 0, 1) both;
+}
+
+@keyframes vwPageEnter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* -----------------------------
+   History (design-draft v3)
+----------------------------- */
+
+.vw-historyRow:hover {
+  background: var(--subtle-fill-secondary);
+}
+
+.vw-historyRow:hover .vw-historyActions {
+  opacity: 1;
+}
+
+/* -----------------------------
+   Overview (design-draft v3)
+----------------------------- */
+
+.vw-micHero {
+  width: 120px;
+  height: 120px;
+  border-radius: 999px;
+  border: 4px solid var(--stroke-card);
+  background: transparent;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.vw-micHeroIcon {
+  font-size: 48px;
+  line-height: 1;
+}
+
+/* -----------------------------
+   Overlay HUD (design-draft v3)
+----------------------------- */
+
+.vw-overlayRoot {
   width: 100vw;
   height: 100vh;
   display: grid;
   place-items: center;
-  background: transparent;
   user-select: none;
 }
 
-.overlayFrame {
+@keyframes vwHudEnter {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes vwHudExit {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+}
+
+@keyframes vwMicBreath {
+  0% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.4;
+  }
+}
+
+.vw-hud {
+  height: var(--hud-height);
+  min-width: var(--hud-min-width);
+  max-width: var(--hud-max-width);
+
+  padding: 0 6px 0 var(--space-16);
+  border-radius: var(--radius-overlay);
+
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--stroke);
-  border-radius: 999px;
-  background: rgba(247, 247, 251, 0.82);
-  box-shadow: var(--shadow);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  gap: var(--space-16);
+
+  border: 1px solid var(--surface-stroke-default);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-flyout);
+
+  animation: vwHudEnter 200ms cubic-bezier(0.0, 0.0, 0.2, 1.0) both;
 }
 
-.overlayLeft {
+.vw-hud[data-exiting="true"] {
+  animation: vwHudExit 150ms linear both;
+}
+
+.vw-hudLeft {
   display: flex;
   align-items: center;
-  gap: 8px;
 }
 
-.overlayDot {
-  width: 10px;
-  height: 10px;
+.vw-hudCenter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  flex: 1;
+  min-width: 0;
+}
+
+.vw-hudRight {
+  display: flex;
+  align-items: center;
+}
+
+.vw-hudMic {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--color-danger-fg);
+  animation: vwMicBreath 1500ms ease-in-out infinite;
+}
+
+/* Minimal ring spinner (Fluent-ish). */
+.vw-hudSpinner {
+  width: 16px;
+  height: 16px;
   border-radius: 999px;
-  border: 1px solid var(--stroke-strong);
-  background: transparent;
+  border: 2px solid var(--control-stroke);
+  border-top-color: var(--color-accent);
+  animation: vwSpin 800ms linear infinite;
 }
 
-.overlayDot.on {
-  border-color: rgba(43, 106, 255, 0.55);
-  background: rgba(43, 106, 255, 0.22);
+@keyframes vwSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
-.overlayTitle {
-  font-size: 12px;
-  letter-spacing: 0.4px;
+.vw-hudErrorIcon {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--color-danger-fg);
 }
 
-.overlayCenter {
+.vw-hudSuccessIcon {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--color-success-fg);
+  animation: vwSuccessPop 300ms ease-out both;
+}
+
+@keyframes vwSuccessPop {
+  0% {
+    transform: scale(0);
+  }
+  70% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.vw-hudVisualizer {
+  height: 24px;
   display: flex;
   align-items: flex-end;
-  gap: 3px;
-  height: 14px;
+  gap: 2px;
 }
 
-.overlayCenter .bar {
-  width: 4px;
-  height: 6px;
-  border: 1px solid var(--stroke);
-  border-radius: 3px;
-  background: rgba(16, 16, 24, 0.04);
+.vw-bar {
+  width: 3px;
+  height: 4px;
+  background: var(--control-stroke);
 }
 
-.overlayCenter .bar.on {
-  border-color: rgba(43, 106, 255, 0.45);
-  background: rgba(43, 106, 255, 0.12);
+.vw-bar.on {
+  background: var(--color-danger-fg);
 }
 
-.overlayRight {
-  display: flex;
-  align-items: center;
-}
-
-.overlayTime {
-  font-family: var(--mono);
-  font-size: 11px;
-  opacity: 0.75;
-}
-
-.overlayError,
-.overlayPreview {
-  margin-top: 10px;
-  max-width: 360px;
-  padding: 8px 10px;
-  border: 1px solid var(--stroke);
-  border-radius: 12px;
-  background: rgba(247, 247, 251, 0.75);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.overlayError {
-  border-color: rgba(255, 43, 43, 0.22);
-  background: rgba(255, 43, 43, 0.06);
-}
-
-
-* { box-sizing: border-box; }
-
-html, body {
-  margin: 0;
-  height: 100%;
-  background: radial-gradient(1200px 800px at 20% 10%, rgba(120,210,255,0.07), transparent 55%),
-              radial-gradient(900px 700px at 80% 30%, rgba(255,255,255,0.05), transparent 60%),
-              var(--bg);
-  color: var(--text);
-  font-family: var(--sans);
-  letter-spacing: 0.2px;
-}
-
-a { color: inherit; }
-
-.container {
-  padding: 22px;
-  display: grid;
-  grid-template-rows: auto 1fr;
-  gap: 14px;
-}
-
-.header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-}
-
-.title {
-  font-size: 16px;
-  letter-spacing: 0.6px;
-  text-transform: uppercase;
-}
-
-.subtitle {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.grid {
-  display: grid;
-  grid-template-columns: 1.2fr 0.8fr;
-  gap: 14px;
-}
-
-.card {
-  border: 1px solid var(--line);
-  background: var(--panel);
-  border-radius: var(--radius);
-  padding: 14px;
-  position: relative;
-  overflow: hidden;
-}
-
-.card::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(to right, rgba(255,255,255,0.05) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(255,255,255,0.05) 1px, transparent 1px);
-  background-size: 18px 18px;
-  opacity: 0.12;
-  pointer-events: none;
-}
-
-.card > * { position: relative; }
-
-.row {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-
-.kv {
-  display: grid;
-  grid-template-columns: 140px 1fr;
-  gap: 10px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.kv b {
-  color: var(--text);
-  font-weight: 600;
-}
-
-.button {
-  border: 1px solid var(--line);
-  background: transparent;
-  color: var(--text);
-  padding: 10px 12px;
-  border-radius: 12px;
-  cursor: pointer;
-  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
-}
-
-.button:hover {
-  border-color: var(--line-strong);
-  background: rgba(255,255,255,0.03);
-}
-
-.button:active {
-  transform: translateY(1px);
-}
-
-.badge {
-  font-family: var(--mono);
-  font-size: 11px;
-  border: 1px dashed var(--line);
-  padding: 6px 8px;
-  border-radius: 999px;
-  color: var(--muted);
-}
-
-.input {
-  width: 100%;
-  border: 1px solid var(--line);
-  background: rgba(0,0,0,0.15);
-  color: var(--text);
-  padding: 10px 12px;
-  border-radius: 12px;
-  outline: none;
-  transition: border-color 140ms ease;
-}
-
-.input:focus {
-  border-color: var(--accent);
-}
-
-.small {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.hr {
-  height: 1px;
-  background: rgba(255,255,255,0.08);
-  margin: 12px 0;
+/* Keep buttons tight inside the pill. */
+.vw-hud .vw-iconButton {
+  width: var(--hud-button-size);
+  height: var(--hud-button-size);
 }

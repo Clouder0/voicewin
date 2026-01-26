@@ -60,11 +60,33 @@ jobs:
 
       - name: Build Tauri app (NSIS installer)
         working-directory: voicewin-tauri
-        run: cargo tauri build
+        run: cargo tauri build --target x86_64-pc-windows-msvc
+
+      - name: Verify binary does not depend on VC++ runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # Tauri app binary name can vary; inspect the first release exe.
+          $releaseDir = Join-Path $env:GITHUB_WORKSPACE 'voicewin-tauri/src-tauri/target/x86_64-pc-windows-msvc/release'
+          $exe = Get-ChildItem -Path $releaseDir -Filter *.exe | Select-Object -First 1 | ForEach-Object { $_.FullName }
+          if (-not $exe -or -not (Test-Path $exe)) {
+            throw "Could not locate built executable under $releaseDir"
+          }
+
+          # dumpbin is provided by the Visual Studio toolchain installed on GitHub-hosted runners.
+          $deps = & dumpbin /DEPENDENTS $exe 2>$null | Out-String
+          if (-not $deps -or $deps.Trim().Length -eq 0) {
+            throw 'dumpbin produced no output (tool missing?)'
+          }
+          if ($deps -match 'VCRUNTIME' -or $deps -match 'MSVCP') {
+            Write-Host $deps
+            throw 'Detected VC++ runtime dependency (VCRUNTIME/MSVCP).'
+          }
 
       - name: Upload NSIS installer
         uses: actions/upload-artifact@v4
         with:
           name: VoiceWin-windows-installer
-          path: voicewin-tauri/src-tauri/target/release/bundle/nsis/*-setup.exe
+          path: voicewin-tauri/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
           if-no-files-found: error

@@ -41,7 +41,10 @@ pub struct SessionResult {
     pub config: EffectiveConfig,
     pub transcript: Option<Transcript>,
     pub enhanced: Option<EnhancedText>,
+
+    // The best final text we have, even if insertion fails.
     pub final_text: Option<String>,
+
     pub insert_mode: InsertMode,
     pub context: ContextSnapshot,
     pub timings: SessionTimings,

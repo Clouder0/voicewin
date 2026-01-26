@@ -30,8 +30,10 @@ pub fn atomic_copy(src: &Path, dst: &Path) -> anyhow::Result<()> {
         ensure_dir(parent)?;
     }
 
-    let mut r = fs::File::open(src).with_context(|| format!("failed to open: {}", src.display()))?;
-    let mut w = fs::File::create(&tmp).with_context(|| format!("failed to create: {}", tmp.display()))?;
+    let mut r =
+        fs::File::open(src).with_context(|| format!("failed to open: {}", src.display()))?;
+    let mut w =
+        fs::File::create(&tmp).with_context(|| format!("failed to create: {}", tmp.display()))?;
 
     if let Err(e) = std::io::copy(&mut r, &mut w) {
         // Best-effort cleanup so we don't leave partial temp files around.
@@ -54,7 +56,8 @@ pub fn file_size_bytes(path: &Path) -> anyhow::Result<u64> {
 }
 
 pub fn has_gguf_magic(path: &Path) -> anyhow::Result<bool> {
-    let mut f = fs::File::open(path).with_context(|| format!("failed to open: {}", path.display()))?;
+    let mut f =
+        fs::File::open(path).with_context(|| format!("failed to open: {}", path.display()))?;
     let mut magic = [0u8; 4];
     let n = f
         .read(&mut magic)
@@ -127,12 +130,15 @@ pub fn validate_bootstrap_model(path: &Path) -> anyhow::Result<()> {
 }
 
 pub fn sha256_file(path: &Path) -> anyhow::Result<String> {
-    let mut f = fs::File::open(path).with_context(|| format!("failed to open: {}", path.display()))?;
+    let mut f =
+        fs::File::open(path).with_context(|| format!("failed to open: {}", path.display()))?;
     let mut hasher = sha2::Sha256::new();
 
     let mut buf = [0u8; 8192];
     loop {
-        let n = f.read(&mut buf).with_context(|| format!("failed reading: {}", path.display()))?;
+        let n = f
+            .read(&mut buf)
+            .with_context(|| format!("failed reading: {}", path.display()))?;
         if n == 0 {
             break;
         }
@@ -165,9 +171,49 @@ pub fn choose_default_local_stt_model_path(app_data_dir: &Path) -> PathBuf {
 
 #[derive(Debug, Clone)]
 pub struct ModelDownloadSpec {
+    pub id: String,
+    pub title: String,
+
     pub url: String,
-    pub filename: String,
+
+    // Pinned integrity: many public GGUF repos do not publish sidecar .sha256 files.
     pub sha256: String,
+
+    pub filename: String,
+
+    pub size_bytes: Option<u64>,
+    pub speed_label: Option<String>,
+    pub accuracy_label: Option<String>,
+    pub recommended: bool,
+}
+
+pub fn whisper_catalog() -> Vec<ModelDownloadSpec> {
+    // Minimal GGUF catalog with pinned checksums.
+    // Sources: FL33TW00D-HF Whisper GGUF repos.
+    vec![
+        ModelDownloadSpec {
+            id: "whisper-base-q4k".into(),
+            title: "Whisper Base".into(),
+            url: "https://huggingface.co/FL33TW00D-HF/whisper-base/resolve/main/base_q4k.gguf".into(),
+            sha256: "002978331fb3fb35c9939ff2ca227bf2d6658fc666fe56415fb5eac0a839b60f".into(),
+            filename: "base_q4k.gguf".into(),
+            size_bytes: Some(44_295_968),
+            speed_label: Some("Fast".into()),
+            accuracy_label: Some("Good".into()),
+            recommended: true,
+        },
+        ModelDownloadSpec {
+            id: "whisper-medium-q4k".into(),
+            title: "Whisper Medium".into(),
+            url: "https://huggingface.co/FL33TW00D-HF/whisper-medium/resolve/main/medium_q4k.gguf".into(),
+            sha256: "88f744da1c6cc2273d226839bd28dd98aab988ef915e47b325b82340f135fb34".into(),
+            filename: "medium_q4k.gguf".into(),
+            size_bytes: Some(443_874_912),
+            speed_label: Some("Slow".into()),
+            accuracy_label: Some("High".into()),
+            recommended: false,
+        },
+    ]
 }
 
 #[cfg(test)]

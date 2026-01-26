@@ -62,6 +62,7 @@ mod tests {
                 language: "en".into(),
                 llm_base_url: "https://example.com/v1".into(),
                 llm_model: "gpt-4o-mini".into(),
+                microphone_device: None,
                 history_enabled: true,
                 context: voicewin_core::context::ContextToggles::default(),
             },

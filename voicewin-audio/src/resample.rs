@@ -4,6 +4,7 @@ use rubato::Resampler;
 /// Resample mono f32 audio to a target sample rate.
 ///
 /// Input is expected to be PCM samples in [-1, 1] with a known sample rate.
+#[allow(dead_code)]
 pub fn resample_mono_f32(
     input_samples: &[f32],
     input_sample_rate_hz: u32,

@@ -130,6 +130,7 @@ async fn main() -> anyhow::Result<()> {
         language: "en".into(),
         llm_base_url,
         llm_model,
+        microphone_device: None,
         history_enabled: true,
         context: voicewin_core::context::ContextToggles::default(),
     };

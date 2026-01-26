@@ -5371,6 +5371,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cpal",
+ "log",
  "rubato",
  "thiserror 2.0.18",
 ]
@@ -5454,8 +5455,12 @@ name = "voicewin-tauri"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "futures-util",
+ "log",
+ "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -5468,7 +5473,9 @@ dependencies = [
  "voicewin-core",
  "voicewin-engine",
  "voicewin-platform",
+ "voicewin-providers",
  "voicewin-runtime",
+ "window-vibrancy",
 ]
 
 [[package]]

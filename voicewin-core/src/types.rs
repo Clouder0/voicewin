@@ -86,4 +86,5 @@ impl AppIdentity {
 pub enum InsertMode {
     Paste,
     PasteAndEnter,
+    ShiftInsert,
 }

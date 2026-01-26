@@ -39,18 +39,20 @@ impl SttRouter {
         language: &str,
     ) -> anyhow::Result<Transcript> {
         match provider {
-            "local" => self
-                .local
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("local STT provider not configured"))?
-                .transcribe(audio, provider, model, language)
-                .await,
-            "elevenlabs" => self
-                .elevenlabs
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("ElevenLabs STT provider not configured"))?
-                .transcribe(audio, provider, model, language)
-                .await,
+            "local" => {
+                self.local
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("local STT provider not configured"))?
+                    .transcribe(audio, provider, model, language)
+                    .await
+            }
+            "elevenlabs" => {
+                self.elevenlabs
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("ElevenLabs STT provider not configured"))?
+                    .transcribe(audio, provider, model, language)
+                    .await
+            }
             other => Err(anyhow::anyhow!("unsupported STT provider: {other}")),
         }
     }

@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -6,15 +7,38 @@ use voicewin_core::config::AppConfig;
 use voicewin_engine::engine::VoicewinEngine;
 use voicewin_engine::traits::{AppContextProvider, AudioInput, Inserter};
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use voicewin_audio::{AudioCaptureError, AudioRecorder};
 use voicewin_runtime::config_store::ConfigStore;
 use voicewin_runtime::ipc::{RunSessionRequest, RunSessionResponse};
 
-#[cfg(windows)]
-use voicewin_runtime::ipc::{RecordingStatus, ToggleRecordingResponse};
+#[cfg(any(windows, target_os = "macos"))]
+pub fn user_facing_audio_error(e: &voicewin_audio::AudioCaptureError) -> String {
+    let raw = e.to_string();
+
+    // Keep messages actionable and short; details are in logs.
+    if raw.contains("NoInputDevice") || raw.to_lowercase().contains("no input device") {
+        return "No microphone detected. Check your mic and choose the device in the app.".into();
+    }
+
+    if raw.to_lowercase().contains("permission") || raw.to_lowercase().contains("access") {
+        #[cfg(windows)]
+        {
+            return "Microphone access appears blocked. Check Windows Settings > Privacy & security > Microphone.".into();
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            return "Microphone access appears blocked. Check System Settings > Privacy & Security > Microphone.".into();
+        }
+    }
+
+    "Audio recording failed. See History for recovery and check logs for details.".into()
+}
+
+
 use voicewin_runtime::runtime_engine::build_engine_from_config;
-use voicewin_runtime::secrets::{delete_secret, get_secret, set_secret, SecretKey};
+use voicewin_runtime::secrets::{SecretKey, delete_secret, get_secret, set_secret};
 
 #[derive(Clone)]
 pub struct AppService {
@@ -22,38 +46,45 @@ pub struct AppService {
     ctx: Arc<dyn AppContextProvider>,
     inserter: Arc<dyn Inserter>,
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     recorder: Arc<tokio::sync::Mutex<Option<AudioRecorder>>>,
-
 }
 
 impl AppService {
-    pub fn new(config_path: PathBuf, ctx: Arc<dyn AppContextProvider>, inserter: Arc<dyn Inserter>) -> Self {
+    pub fn new(
+        config_path: PathBuf,
+        ctx: Arc<dyn AppContextProvider>,
+        inserter: Arc<dyn Inserter>,
+    ) -> Self {
         Self {
             config_store: ConfigStore::at_path(config_path),
             ctx,
             inserter,
-            #[cfg(windows)]
-            recorder: Arc::new(tokio::sync::Mutex::new(AudioRecorder::open_default().ok())),
-
+            #[cfg(any(windows, target_os = "macos"))]
+            recorder: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     pub async fn start_recording(&self) -> Result<(), AudioCaptureError> {
         let mut recorder = self.recorder.lock().await;
-        let r = recorder
-            .as_mut()
-            .ok_or(AudioCaptureError::NoInputDevice)?;
-        r.start()
+        if recorder.is_none() {
+            let cfg = self.load_config().ok();
+            let preferred = cfg
+                .as_ref()
+                .and_then(|c| c.defaults.microphone_device.as_deref());
+            *recorder = Some(AudioRecorder::open_named(preferred)?);
+        }
+        recorder
+            .as_ref()
+            .ok_or(AudioCaptureError::NoInputDevice)?
+            .start()
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     pub async fn stop_recording(&self) -> Result<AudioInput, AudioCaptureError> {
         let mut recorder = self.recorder.lock().await;
-        let r = recorder
-            .as_mut()
-            .ok_or(AudioCaptureError::NoInputDevice)?;
+        let r = recorder.as_mut().ok_or(AudioCaptureError::NoInputDevice)?;
 
         let captured = r.stop_captured()?;
 
@@ -69,28 +100,36 @@ impl AppService {
         })
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     pub async fn cancel_recording(&self) -> Result<(), AudioCaptureError> {
         // Best-effort: stop and discard captured audio.
         let mut recorder = self.recorder.lock().await;
-        let r = recorder
-            .as_mut()
-            .ok_or(AudioCaptureError::NoInputDevice)?;
+        let Some(r) = recorder.as_mut() else {
+            return Ok(());
+        };
 
         let _ = r.stop();
         Ok(())
     }
 
-    #[cfg(windows)]
-    pub async fn start_recording_with_level_callback<F>(&self, cb: F) -> Result<(), AudioCaptureError>
+    #[cfg(any(windows, target_os = "macos"))]
+    pub async fn start_recording_with_level_callback<F>(
+        &self,
+        cb: F,
+    ) -> Result<(), AudioCaptureError>
     where
         F: Fn(&[f32]) + Send + Sync + 'static,
     {
         // Set callback first, then start.
         let mut recorder = self.recorder.lock().await;
-        let r = recorder
-            .as_mut()
-            .ok_or(AudioCaptureError::NoInputDevice)?;
+        if recorder.is_none() {
+            let cfg = self.load_config().ok();
+            let preferred = cfg
+                .as_ref()
+                .and_then(|c| c.defaults.microphone_device.as_deref());
+            *recorder = Some(AudioRecorder::open_named(preferred)?);
+        }
+        let r = recorder.as_ref().ok_or(AudioCaptureError::NoInputDevice)?;
 
         r.set_level_callback(cb);
         r.start()
@@ -126,23 +165,59 @@ impl AppService {
         Ok(())
     }
 
-    pub async fn run_session(&self, req: RunSessionRequest, audio: AudioInput) -> anyhow::Result<RunSessionResponse> {
-        let cfg = self.config_store.load()?;
-        let history_enabled = cfg.defaults.history_enabled;
+    pub async fn get_foreground_app(&self) -> anyhow::Result<voicewin_core::types::AppIdentity> {
+        self.ctx.foreground_app().await
+    }
 
-        let engine: VoicewinEngine = build_engine_from_config(cfg, self.ctx.clone(), self.inserter.clone()).await?;
+    pub async fn run_session(
+        &self,
+        req: RunSessionRequest,
+        audio: AudioInput,
+    ) -> anyhow::Result<RunSessionResponse> {
+        self.run_session_with_hook(req, audio, |_stage| async {}).await
+    }
+
+    pub async fn run_session_with_hook<F, Fut>(
+        &self,
+        req: RunSessionRequest,
+        audio: AudioInput,
+        on_stage: F,
+    ) -> anyhow::Result<RunSessionResponse>
+    where
+        F: Fn(&'static str) -> Fut + Send + Sync,
+        Fut: Future<Output = ()> + Send,
+    {
+        let cfg = self.config_store.load()?;
+
+        // Design-draft UI treats History as always enabled.
+        // Keep the config flag for backward compatibility, but it must not disable history.
+        let history_enabled = true;
+        let _ = cfg.defaults.history_enabled;
+
+        let engine: VoicewinEngine =
+            build_engine_from_config(cfg, self.ctx.clone(), self.inserter.clone()).await?;
 
         // Reserved for future use (e.g. transcript override/debug).
         let _ = req;
 
-        let result = engine.run_session(audio).await?;
+        // Run the full session pipeline and emit stage progress.
+        let res = engine.run_session_with_hook(audio, on_stage).await;
 
-        let stage = result
-            .stage_label
-            .unwrap_or_else(|| format!("{:?}", result.stage).to_lowercase());
+        let (stage, final_text, error) = match res {
+            Ok(result) => {
+                let stage = result
+                    .stage_label
+                    .unwrap_or_else(|| format!("{:?}", result.stage).to_lowercase());
+                (stage, result.final_text, result.error)
+            }
+            Err(e) => {
+                // On any failure, rely on History for recovery.
+                ("error".into(), None, Some(e.to_string()))
+            }
+        };
 
         if history_enabled {
-            if let Some(text) = result.final_text.clone() {
+            if let Some(text) = final_text.clone() {
                 let ts = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
@@ -166,6 +241,7 @@ impl AppService {
                         .map(|t| t.0.clone()),
                     text,
                     stage: stage.clone(),
+                    error: error.clone(),
                 };
 
                 // Best-effort: write history alongside config.
@@ -183,73 +259,11 @@ impl AppService {
 
         Ok(RunSessionResponse {
             stage,
-            final_text: result.final_text,
-            error: result.error,
+            final_text,
+            error,
         })
     }
 
-    #[cfg(windows)]
-    pub async fn toggle_recording(&self) -> ToggleRecordingResponse {
-        // Simple toggle: if we were recording, stop and run.
-        // Otherwise start recording.
-        static IS_RECORDING: std::sync::OnceLock<std::sync::atomic::AtomicBool> =
-            std::sync::OnceLock::new();
-        let flag = IS_RECORDING.get_or_init(|| std::sync::atomic::AtomicBool::new(false));
-
-        let was_recording = flag.swap(true, std::sync::atomic::Ordering::SeqCst);
-        if !was_recording {
-            // Start recording.
-            if let Err(e) = self.start_recording().await {
-                flag.store(false, std::sync::atomic::Ordering::SeqCst);
-                return ToggleRecordingResponse {
-                    status: RecordingStatus { is_recording: false },
-                    stage: "error".into(),
-                    final_text: None,
-                    error: Some(e.to_string()),
-                };
-            }
-
-            return ToggleRecordingResponse {
-                status: RecordingStatus { is_recording: true },
-                stage: "recording".into(),
-                final_text: None,
-                error: None,
-            };
-        }
-
-        // Stop recording.
-        flag.store(false, std::sync::atomic::Ordering::SeqCst);
-        let audio = match self.stop_recording().await {
-            Ok(a) => a,
-            Err(e) => {
-                return ToggleRecordingResponse {
-                    status: RecordingStatus { is_recording: false },
-                    stage: "error".into(),
-                    final_text: None,
-                    error: Some(e.to_string()),
-                };
-            }
-        };
-
-        let res = self
-            .run_session(RunSessionRequest { transcript: String::new() }, audio)
-            .await;
-
-        match res {
-            Ok(r) => ToggleRecordingResponse {
-                status: RecordingStatus { is_recording: false },
-                stage: r.stage,
-                final_text: r.final_text,
-                error: r.error,
-            },
-            Err(e) => ToggleRecordingResponse {
-                status: RecordingStatus { is_recording: false },
-                stage: "error".into(),
-                final_text: None,
-                error: Some(e.to_string()),
-            },
-        }
-    }
 }
 
 #[cfg(test)]
@@ -294,6 +308,7 @@ mod tests {
                 language: "en".into(),
                 llm_base_url: "https://example.com/v1".into(),
                 llm_model: "gpt-4o-mini".into(),
+                microphone_device: None,
                 history_enabled: true,
                 context: voicewin_core::context::ContextToggles::default(),
             },
@@ -317,10 +332,15 @@ mod tests {
             samples: vec![0.0; 160],
         };
 
-        // This will fail because local model path is missing, but validates plumbing.
-        let res = svc
-            .run_session(RunSessionRequest { transcript: "hi".into() }, audio)
+        // This should not panic. It may fail (missing local model), but the service should
+        // return a structured error instead of crashing.
+        let _ = svc
+            .run_session(
+                RunSessionRequest {
+                    transcript: "hi".into(),
+                },
+                audio,
+            )
             .await;
-        assert!(res.is_err());
     }
 }

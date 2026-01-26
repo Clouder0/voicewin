@@ -1,15 +1,15 @@
-//! Windows (and general CPAL) microphone capture.
-//!
-//! This is a minimal MVP recorder:
-//! - Records raw input from the default device
-//! - Converts to mono `f32`
-//! - Optionally resamples to 16kHz for Whisper
-//!
-//! It is intentionally simple and avoids VAD for now.
-
-#![cfg(windows)]
+//
+// Minimal CPAL-based audio recorder.
+//
+// Supported platforms:
+// - Windows
+// - macOS
+//
+// Linux support is intentionally not enabled yet because we don't want to introduce
+// new platform dependencies without committing to a full Linux UX.
 
 use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Sample, SampleFormat, SizedSample, Stream};
@@ -21,14 +21,29 @@ pub enum AudioCaptureError {
     #[error("no input device found")]
     NoInputDevice,
 
+    #[error("failed to list input devices: {0}")]
+    ListDevices(#[from] cpal::DevicesError),
+
     #[error("failed to query supported configs: {0}")]
     SupportedConfigs(#[from] cpal::SupportedStreamConfigsError),
+
+    #[error("failed to get default config: {0}")]
+    DefaultConfig(#[from] cpal::DefaultStreamConfigError),
 
     #[error("failed to build input stream: {0}")]
     BuildStream(#[from] cpal::BuildStreamError),
 
     #[error("failed to play stream: {0}")]
     PlayStream(#[from] cpal::PlayStreamError),
+
+    #[error("audio worker failed: {0}")]
+    Worker(String),
+
+    #[error("audio worker startup timeout")]
+    WorkerTimeout,
+
+    #[error("recording stop timed out")]
+    StopTimeout,
 
     #[error("failed to resample: {0}")]
     Resample(#[from] anyhow::Error),
@@ -68,7 +83,51 @@ enum Cmd {
     Shutdown,
 }
 
+enum WorkerMsg {
+    Ready,
+    Error(String),
+}
+
 impl AudioRecorder {
+    pub fn list_input_device_names() -> Result<Vec<String>, AudioCaptureError> {
+        let host = cpal::default_host();
+        let mut out = Vec::new();
+        for dev in host.input_devices()? {
+            if let Ok(name) = dev.name() {
+                out.push(name);
+            }
+        }
+        out.sort();
+        out.dedup();
+        Ok(out)
+    }
+
+    pub fn open_named(device_name: Option<&str>) -> Result<Self, AudioCaptureError> {
+        let host = cpal::default_host();
+
+        if let Some(needle) = device_name {
+            let needle = needle.trim();
+            if !needle.is_empty() {
+                if let Ok(devices) = host.input_devices() {
+                    for dev in devices {
+                        if let Ok(name) = dev.name() {
+                            if name == needle {
+                                log::info!("Using input device: {name}");
+                                return Self::open(Some(dev));
+                            }
+                        }
+                    }
+                }
+
+                log::warn!(
+                    "Preferred input device not found, falling back to default: {needle}"
+                );
+            }
+        }
+
+        Self::open_default()
+    }
+
     pub fn open_default() -> Result<Self, AudioCaptureError> {
         let host = cpal::default_host();
         let device = host
@@ -86,74 +145,80 @@ impl AudioRecorder {
                 .ok_or(AudioCaptureError::NoInputDevice)?,
         };
 
-        let supported = device.supported_input_configs()?;
-
-        let mut best: Option<cpal::SupportedStreamConfigRange> = None;
-        for cfg in supported {
-            // Prefer configs that include 16kHz.
-            if cfg.min_sample_rate().0 <= 16_000 && cfg.max_sample_rate().0 >= 16_000 {
-                best = Some(cfg);
-                break;
-            }
-            if best.is_none() {
-                best = Some(cfg);
-            }
-        }
-
-        let best = best.ok_or(AudioCaptureError::NoInputDevice)?;
-
-        // We will explicitly request 16kHz if supported by the selected range, otherwise use max.
-        let target_rate = if best.min_sample_rate().0 <= 16_000 && best.max_sample_rate().0 >= 16_000 {
-            cpal::SampleRate(16_000)
-        } else {
-            best.max_sample_rate()
-        };
-
-        let config = best.with_sample_rate(target_rate);
-        let sample_rate_hz = config.sample_rate().0;
+        // Prefer the device's default input config first.
+        // We'll resample to 16k later if needed.
+        let default_cfg = device.default_input_config()?;
+        let sample_rate_hz = default_cfg.sample_rate().0;
 
         let (sample_tx, sample_rx) = mpsc::channel::<Vec<f32>>();
         let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
+        let (worker_tx, worker_rx) = mpsc::channel::<WorkerMsg>();
 
         let level_cb: Arc<Mutex<Option<Arc<dyn Fn(&[f32]) + Send + Sync + 'static>>>> =
             Arc::new(Mutex::new(None));
         let level_cb_worker = level_cb.clone();
 
         let worker_handle = std::thread::spawn(move || {
+            let config = default_cfg;
             let sample_format = config.sample_format();
             let channels = config.channels() as usize;
 
             let stream = match sample_format {
                 SampleFormat::F32 => {
-                    build_input_stream::<f32>(&device, &config.into(), channels, sample_tx)
+                    build_input_stream::<f32>(&device, &config.clone().into(), channels, sample_tx)
                 }
-                SampleFormat::I16 => build_input_stream::<i16>(&device, &config.into(), channels, sample_tx),
-                SampleFormat::U16 => build_input_stream::<u16>(&device, &config.into(), channels, sample_tx),
-                SampleFormat::I8 => build_input_stream::<i8>(&device, &config.into(), channels, sample_tx),
-                SampleFormat::U8 => build_input_stream::<u8>(&device, &config.into(), channels, sample_tx),
-                SampleFormat::I32 => build_input_stream::<i32>(&device, &config.into(), channels, sample_tx),
-                SampleFormat::U32 => build_input_stream::<u32>(&device, &config.into(), channels, sample_tx),
-                SampleFormat::F64 => build_input_stream::<f64>(&device, &config.into(), channels, sample_tx),
-                // Fall back: attempt f32.
-                _ => build_input_stream::<f32>(&device, &config.into(), channels, sample_tx),
+                SampleFormat::I16 => {
+                    build_input_stream::<i16>(&device, &config.clone().into(), channels, sample_tx)
+                }
+                SampleFormat::U16 => {
+                    build_input_stream::<u16>(&device, &config.clone().into(), channels, sample_tx)
+                }
+                SampleFormat::I8 => {
+                    build_input_stream::<i8>(&device, &config.clone().into(), channels, sample_tx)
+                }
+                SampleFormat::U8 => {
+                    build_input_stream::<u8>(&device, &config.clone().into(), channels, sample_tx)
+                }
+                SampleFormat::I32 => {
+                    build_input_stream::<i32>(&device, &config.clone().into(), channels, sample_tx)
+                }
+                SampleFormat::U32 => {
+                    build_input_stream::<u32>(&device, &config.clone().into(), channels, sample_tx)
+                }
+                SampleFormat::F64 => {
+                    build_input_stream::<f64>(&device, &config.clone().into(), channels, sample_tx)
+                }
+                _ => build_input_stream::<f32>(&device, &config.clone().into(), channels, sample_tx),
             };
 
             let stream = match stream {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!("Audio stream build failed: {e}");
+                    let _ = worker_tx.send(WorkerMsg::Error(format!("build stream: {e}")));
+                    log::error!("Audio stream build failed: {e}");
                     return;
                 }
             };
 
             if let Err(e) = stream.play() {
-                eprintln!("Audio stream play failed: {e}");
+                let _ = worker_tx.send(WorkerMsg::Error(format!("play stream: {e}")));
+                log::error!("Audio stream play failed: {e}");
                 return;
             }
+
+            let _ = worker_tx.send(WorkerMsg::Ready);
 
             run_consumer(sample_rx, cmd_rx, level_cb_worker);
             drop(stream);
         });
+
+        // Block briefly until the worker has either started the stream or failed.
+        match worker_rx.recv_timeout(Duration::from_secs(2)) {
+            Ok(WorkerMsg::Ready) => {}
+            Ok(WorkerMsg::Error(e)) => return Err(AudioCaptureError::Worker(e)),
+            Err(mpsc::RecvTimeoutError::Timeout) => return Err(AudioCaptureError::WorkerTimeout),
+            Err(_) => return Err(AudioCaptureError::Channel),
+        }
 
         Ok(Self {
             cmd_tx,
@@ -164,7 +229,9 @@ impl AudioRecorder {
     }
 
     pub fn start(&self) -> Result<(), AudioCaptureError> {
-        self.cmd_tx.send(Cmd::Start).map_err(|_| AudioCaptureError::Channel)
+        self.cmd_tx
+            .send(Cmd::Start)
+            .map_err(|_| AudioCaptureError::Channel)
     }
 
     pub fn stop(&self) -> Result<Vec<f32>, AudioCaptureError> {
@@ -172,7 +239,13 @@ impl AudioRecorder {
         self.cmd_tx
             .send(Cmd::Stop(resp_tx))
             .map_err(|_| AudioCaptureError::Channel)?;
-        resp_rx.recv().map_err(|_| AudioCaptureError::Channel)
+
+        resp_rx
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|e| match e {
+                mpsc::RecvTimeoutError::Timeout => AudioCaptureError::StopTimeout,
+                mpsc::RecvTimeoutError::Disconnected => AudioCaptureError::Channel,
+            })
     }
 
     pub fn close(mut self) -> Result<(), AudioCaptureError> {
@@ -217,11 +290,7 @@ where
             buf.extend(data.iter().map(|&s| s.to_sample::<f32>()));
         } else {
             for frame in data.chunks_exact(channels) {
-                let mono = frame
-                    .iter()
-                    .map(|&s| s.to_sample::<f32>())
-                    .sum::<f32>()
-                    / channels as f32;
+                let mono = frame.iter().map(|&s| s.to_sample::<f32>()).sum::<f32>() / channels as f32;
                 buf.push(mono);
             }
         }
@@ -229,7 +298,15 @@ where
         let _ = sample_tx.send(buf.clone());
     };
 
-    device.build_input_stream(config, cb, |_err| {}, None)
+    device.build_input_stream(
+        config,
+        cb,
+        |err| {
+            // These errors are crucial to debug “recording started but silent”.
+            log::error!("Audio stream error: {err}");
+        },
+        None,
+    )
 }
 
 fn run_consumer(
@@ -241,6 +318,7 @@ fn run_consumer(
     let mut captured: Vec<f32> = Vec::new();
 
     loop {
+        // Always drain commands promptly, even if the stream is stalled.
         while let Ok(cmd) = cmd_rx.try_recv() {
             match cmd {
                 Cmd::Start => {
@@ -256,7 +334,7 @@ fn run_consumer(
             }
         }
 
-        match sample_rx.recv() {
+        match sample_rx.recv_timeout(Duration::from_millis(50)) {
             Ok(samples) => {
                 if let Some(cb) = level_cb.lock().unwrap().as_ref() {
                     cb(&samples);
@@ -265,9 +343,11 @@ fn run_consumer(
                     captured.extend_from_slice(&samples);
                 }
             }
-            Err(_) => return,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // No audio chunk yet; loop around to check commands again.
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => return,
         }
-
-        // Keep looping; commands are polled between chunks.
     }
 }

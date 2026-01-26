@@ -9,12 +9,13 @@ export type ContextToggles = {
 export type GlobalDefaults = {
   enable_enhancement: boolean;
   prompt_id?: string | null;
-  insert_mode: 'Paste' | 'PasteAndEnter';
+  insert_mode: 'Paste' | 'PasteAndEnter' | 'ShiftInsert';
   stt_provider: string;
   stt_model: string;
   language: string;
   llm_base_url: string;
   llm_model: string;
+  microphone_device?: string | null;
   history_enabled: boolean;
   context: ContextToggles;
 };
@@ -38,7 +39,7 @@ export type AppMatcherWire =
 export type PowerModeOverridesWire = {
   enable_enhancement?: boolean;
   prompt_id?: string;
-  insert_mode?: 'Paste' | 'PasteAndEnter';
+  insert_mode?: 'Paste' | 'PasteAndEnter' | 'ShiftInsert';
   stt_provider?: string;
   stt_model?: string;
   language?: string;
@@ -63,7 +64,7 @@ export type AppMatcher =
 export type PowerModeOverrides = {
   enable_enhancement?: boolean | null;
   prompt_id?: string | null;
-  insert_mode?: 'Paste' | 'PasteAndEnter' | null;
+  insert_mode?: 'Paste' | 'PasteAndEnter' | 'ShiftInsert' | null;
   stt_provider?: string | null;
   stt_model?: string | null;
   language?: string | null;
@@ -94,6 +95,7 @@ export type HistoryEntry = {
   app_window_title?: string | null;
   text: string;
   stage: string;
+  error?: string | null;
 };
 
 export function decodeAppMatcherWire(m: AppMatcherWire): AppMatcher {

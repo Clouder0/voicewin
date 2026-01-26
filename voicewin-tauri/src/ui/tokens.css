@@ -1,0 +1,118 @@
+:root {
+  /* Spatial system (4px base) */
+  --space-4: 4px;
+  --space-8: 8px;
+  --space-12: 12px;
+  --space-16: 16px;
+  --space-24: 24px;
+  --space-32: 32px;
+  --space-48: 48px;
+
+  /* Component sizing tokens (explicit in design spec) */
+  --nav-rail-width: 68px;
+  --nav-item-size: 40px;
+  --hud-height: 48px;
+  --hud-min-width: 160px;
+  --hud-max-width: 600px;
+  --hud-button-size: 36px;
+
+  /* Typography (Segoe UI Variable) */
+  --font-display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: Consolas, "Cascadia Mono", ui-monospace, monospace;
+
+  --type-display-size: 28px;
+  --type-display-line: 36px;
+  --type-display-weight: 600;
+  --type-display-tracking: -0.01em;
+
+  --type-title-size: 20px;
+  --type-title-line: 28px;
+  --type-title-weight: 600;
+
+  --type-subtitle-size: 16px;
+  --type-subtitle-line: 24px;
+  --type-subtitle-weight: 600;
+
+  --type-body-size: 14px;
+  --type-body-line: 20px;
+  --type-body-weight: 400;
+
+  --type-body-strong-weight: 600;
+
+  --type-caption-size: 12px;
+  --type-caption-line: 16px;
+  --type-caption-weight: 400;
+
+  --type-mono-size: 13px;
+  --type-mono-line: 20px;
+  --type-mono-weight: 400;
+
+  /* Shapes & elevation */
+  --radius-window: 8px;
+  --radius-overlay: 24px;
+  --radius-card: 4px;
+  --radius-button: 4px;
+
+  --shadow-flyout: 0px 8px 16px rgba(0, 0, 0, 0.14);
+
+  /* Semantic colors (fallbacks; runtime may override accent) */
+  --color-accent: #2b6aff;
+  --color-accent-text: #ffffff;
+
+  --color-danger-bg: #fde7e9;
+  --color-danger-fg: #c50f1f;
+
+  --color-success-fg: #107c10;
+
+  /* Surfaces (fallbacks; actual Mica/Acrylic handled by window effects where possible) */
+  --surface-window: #f3f3f3;
+  --surface-window-dark: #202020;
+
+  --surface-card: rgba(255, 255, 255, 0.50);
+  --stroke-card: rgba(0, 0, 0, 0.05);
+
+  --text-primary: rgba(0, 0, 0, 0.90);
+  --text-secondary: rgba(0, 0, 0, 0.60);
+
+  --subtle-fill-secondary: rgba(0, 0, 0, 0.05);
+  --subtle-fill-tertiary: rgba(0, 0, 0, 0.08);
+  --layer-fill: rgba(0, 0, 0, 0.04);
+
+  --control-fill: rgba(255, 255, 255, 0.85);
+  --control-stroke: rgba(0, 0, 0, 0.16);
+  --control-stroke-strong: rgba(0, 0, 0, 0.22);
+
+  --surface-stroke-default: rgba(0, 0, 0, 0.16);
+
+  color-scheme: light;
+}
+
+/* Dark theme fallbacks (best-effort). */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface-window: #202020;
+    --surface-card: rgba(255, 255, 255, 0.10);
+    --stroke-card: rgba(255, 255, 255, 0.10);
+
+    --text-primary: rgba(255, 255, 255, 0.92);
+    --text-secondary: rgba(255, 255, 255, 0.68);
+
+    --subtle-fill-secondary: rgba(255, 255, 255, 0.06);
+    --subtle-fill-tertiary: rgba(255, 255, 255, 0.10);
+    --layer-fill: rgba(255, 255, 255, 0.06);
+
+    --control-fill: rgba(255, 255, 255, 0.10);
+    --control-stroke: rgba(255, 255, 255, 0.18);
+    --control-stroke-strong: rgba(255, 255, 255, 0.26);
+
+    --color-danger-bg: #431316;
+    --color-danger-fg: #ff99a4;
+
+    --color-success-fg: #6ccb5f;
+
+    --surface-stroke-default: rgba(255, 255, 255, 0.18);
+
+    color-scheme: dark;
+  }
+}

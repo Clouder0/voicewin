@@ -14,8 +14,8 @@
       {
         "label": "main",
         "title": "VoiceWin",
-        "width": 820,
-        "height": 560,
+        "width": 960,
+        "height": 680,
         "visible": true,
         "resizable": true
       }
@@ -33,11 +33,14 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": ["nsis", "dmg"],
     "license": "GPL-3.0-only",
     "resources": [
       "resources/models/bootstrap.gguf"
     ],
+    "macos": {
+      "infoPlist": "Info.plist"
+    },
     "windows": {
       "nsis": {
         "installMode": "currentUser"
@@ -51,9 +54,9 @@
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
-      "icons/icon.ico"
+      "icons/icon.ico",
+      "icons/icon.icns"
     ]
   }
 }
-
 

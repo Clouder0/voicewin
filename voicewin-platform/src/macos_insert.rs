@@ -56,7 +56,8 @@ fn snapshot_pasteboard(pasteboard: &NSPasteboard) -> Vec<PasteboardItemSnapshot>
     let mut total = 0usize;
 
     // `pasteboardItems` may be nil.
-    let items: Option<Retained<NSArray<NSPasteboardItem>>> = unsafe { pasteboard.pasteboardItems() };
+    let items: Option<Retained<NSArray<NSPasteboardItem>>> =
+        unsafe { pasteboard.pasteboardItems() };
     let Some(items) = items else {
         return out;
     };
@@ -227,6 +228,9 @@ pub fn paste_text_via_clipboard(text: &str, mode: InsertMode) -> anyhow::Result<
         thread::sleep(Duration::from_millis(50));
         post_enter()?;
     }
+
+    // macOS has no Shift+Insert paste convention; treat it like regular paste.
+    // Nothing to do here since we already sent Cmd+V.
 
     // Restore pasteboard after a delay, but only if the user/app hasn't changed it.
     thread::sleep(Duration::from_millis(1000));

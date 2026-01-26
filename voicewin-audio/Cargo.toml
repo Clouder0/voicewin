@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 anyhow = "1"
 cpal = "0.16.0"
+log = "0.4"
 rubato = "0.16.2"
 thiserror = "2"
 

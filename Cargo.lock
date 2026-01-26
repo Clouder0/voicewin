@@ -2298,6 +2298,7 @@ dependencies = [
  "anyhow",
  "approx",
  "cpal",
+ "log",
  "rubato",
  "thiserror 2.0.18",
 ]

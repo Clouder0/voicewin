@@ -1,5 +1,6 @@
 use crate::session::{SessionResult, SessionStage, ms};
 use crate::traits::{AppContextProvider, AudioInput, Inserter, LlmProvider, SttProvider};
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Instant;
 use thiserror::Error;
@@ -60,7 +61,23 @@ impl VoicewinEngine {
         }
     }
 
+    /// Runs the full pipeline (transcribe -> optional enhance -> insert).
     pub async fn run_session(&self, audio: AudioInput) -> anyhow::Result<SessionResult> {
+        self.run_session_with_hook(audio, |_stage| async {}).await
+    }
+
+    /// Same as `run_session`, but emits a stage hook as the pipeline progresses.
+    ///
+    /// The hook is intended for UI progress (e.g. overlay HUD) and must be fast.
+    pub async fn run_session_with_hook<F, Fut>(
+        &self,
+        audio: AudioInput,
+        on_stage: F,
+    ) -> anyhow::Result<SessionResult>
+    where
+        F: Fn(&'static str) -> Fut,
+        Fut: Future<Output = ()>,
+    {
         let app = self.context_provider.foreground_app().await?;
         let ctx_snapshot = self
             .context_provider
@@ -72,6 +89,7 @@ impl VoicewinEngine {
         let eff =
             resolve_effective_config(&self.cfg.defaults, &self.cfg.profiles, &app, &ephemeral);
 
+        // Build a result shell; we will fill `final_text` before insertion so it is recoverable.
         let mut result = SessionResult::success(
             app.clone(),
             eff.clone(),
@@ -83,10 +101,12 @@ impl VoicewinEngine {
         // 0) Recording (performed by caller)
         result.stage = SessionStage::Recording;
         result.stage_label = Some(STAGE_RECORDING.into());
+        on_stage(STAGE_RECORDING).await;
 
         // 1) Transcribe
         result.stage = SessionStage::Transcribing;
         result.stage_label = Some(STAGE_TRANSCRIBING.into());
+        on_stage(STAGE_TRANSCRIBING).await;
 
         let t0 = Instant::now();
         let transcript = self
@@ -105,13 +125,14 @@ impl VoicewinEngine {
             prompt_id = detection.selected_prompt_id;
         }
 
-        // 3) Enhance if enabled
-        result.stage = SessionStage::Enhancing;
-        result.stage_label = Some(STAGE_ENHANCING.into());
-
         let mut enhanced = None;
         let mut enhancement_ms = None;
         if eff.enable_enhancement || detection.should_enable_enhancement {
+            // 3) Enhance
+            result.stage = SessionStage::Enhancing;
+            result.stage_label = Some(STAGE_ENHANCING.into());
+            on_stage(STAGE_ENHANCING).await;
+
             let selected = prompt_id
                 .as_ref()
                 .and_then(|id| self.cfg.prompts.iter().find(|p| &p.id == id))
@@ -162,16 +183,28 @@ impl VoicewinEngine {
             enhanced = Some(llm_out);
         }
 
+        // Make the output text recoverable even if insertion fails.
+        result.final_text = Some(final_text.clone());
+
         // 4) Insert
         result.stage = SessionStage::Inserting;
         result.stage_label = Some(STAGE_INSERTING.into());
+        on_stage(STAGE_INSERTING).await;
 
         let mode: InsertMode = eff.insert_mode;
-        self.inserter.insert(&final_text, mode).await?;
+        if let Err(e) = self.inserter.insert(&final_text, mode).await {
+            result.stage = SessionStage::Failed;
+            result.stage_label = Some("failed".into());
+            result.transcript = Some(transcript);
+            result.enhanced = enhanced;
+            result.timings.transcription_ms = Some(transcription_ms);
+            result.timings.enhancement_ms = enhancement_ms;
+            result.error = Some(e.to_string());
+            return Ok(result);
+        }
 
         result.stage = SessionStage::Done;
         result.stage_label = Some(STAGE_DONE.into());
-        result.final_text = Some(final_text);
         result.transcript = Some(transcript);
         result.enhanced = enhanced;
         result.timings.transcription_ms = Some(transcription_ms);

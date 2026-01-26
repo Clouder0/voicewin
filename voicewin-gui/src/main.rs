@@ -22,6 +22,7 @@ async fn main() -> anyhow::Result<()> {
         llm_base_url: std::env::var("LLM_BASE_URL")
             .unwrap_or_else(|_| "http://localhost:11434/v1".into()),
         llm_model: std::env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into()),
+        microphone_device: None,
         history_enabled: true,
         context: voicewin_core::context::ContextToggles::default(),
     };

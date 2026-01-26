@@ -1,8 +1,7 @@
-pub mod resample;
+mod resample;
 
-// Capture will be implemented behind OS-specific backends.
-#[cfg(windows)]
-pub mod windows;
+#[cfg(any(windows, target_os = "macos"))]
+mod recorder;
 
-#[cfg(windows)]
-pub use windows::{AudioCaptureError, AudioRecorder, CapturedAudio};
+#[cfg(any(windows, target_os = "macos"))]
+pub use recorder::{AudioCaptureError, AudioRecorder, CapturedAudio};

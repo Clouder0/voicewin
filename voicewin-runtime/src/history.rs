@@ -10,8 +10,16 @@ pub struct HistoryEntry {
     pub app_process_name: Option<String>,
     pub app_exe_path: Option<String>,
     pub app_window_title: Option<String>,
+
+    // The final text the user can recover/copy.
     pub text: String,
+
+    // UI hint (e.g. "done", "error", "transcribing").
     pub stage: String,
+
+    // Optional error message if the session failed.
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -22,7 +30,10 @@ pub struct HistoryStore {
 
 impl HistoryStore {
     pub fn at_path(path: PathBuf) -> Self {
-        Self { path, max_entries: 200 }
+        Self {
+            path,
+            max_entries: 200,
+        }
     }
 
     pub fn with_max_entries(mut self, max: usize) -> Self {
@@ -63,6 +74,35 @@ impl HistoryStore {
         Ok(())
     }
 
+    pub fn delete_entry(&self, ts_unix_ms: i64, text: &str) -> anyhow::Result<bool> {
+        if !self.path.exists() {
+            return Ok(false);
+        }
+
+        let mut entries = self.load()?;
+        let before = entries.len();
+
+        // Remove the newest matching entry (most user-intentful if duplicates exist).
+        if let Some(idx) = entries
+            .iter()
+            .rposition(|e| e.ts_unix_ms == ts_unix_ms && e.text == text)
+        {
+            entries.remove(idx);
+        }
+
+        if entries.len() == before {
+            return Ok(false);
+        }
+
+        let tmp = self.path.with_extension("tmp");
+        fs::write(&tmp, serde_json::to_string_pretty(&entries)?)
+            .with_context(|| format!("failed to write history temp: {}", tmp.display()))?;
+        crate::models::replace_file(&tmp, &self.path)
+            .with_context(|| format!("failed to replace history: {}", self.path.display()))?;
+
+        Ok(true)
+    }
+
     pub fn clear(&self) -> anyhow::Result<()> {
         if self.path.exists() {
             fs::remove_file(&self.path)
@@ -93,6 +133,7 @@ mod tests {
                 app_window_title: None,
                 text: "a".into(),
                 stage: "done".into(),
+                error: None,
             })
             .unwrap();
         store
@@ -103,6 +144,7 @@ mod tests {
                 app_window_title: None,
                 text: "b".into(),
                 stage: "done".into(),
+                error: None,
             })
             .unwrap();
         store
@@ -113,6 +155,7 @@ mod tests {
                 app_window_title: None,
                 text: "c".into(),
                 stage: "done".into(),
+                error: None,
             })
             .unwrap();
 

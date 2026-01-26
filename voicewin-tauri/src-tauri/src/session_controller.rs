@@ -12,12 +12,27 @@ pub enum SessionStage {
     Idle,
     Recording,
     Transcribing,
+
+    // These are emitted via the engine stage hook, but depending on config/user settings
+    // they may be skipped (e.g. enhancement disabled).
     Enhancing,
     Inserting,
-    Done,
+
+    Success,
     Error,
     Cancelled,
 }
+
+// `cargo check` on Linux doesn't compile the Windows/macOS recording path; keep warnings down.
+#[cfg(not(any(windows, target_os = "macos")))]
+#[allow(dead_code)]
+const _STAGE_KEEPALIVE_ENHANCING: SessionStage = SessionStage::Enhancing;
+#[cfg(not(any(windows, target_os = "macos")))]
+#[allow(dead_code)]
+const _STAGE_KEEPALIVE_INSERTING: SessionStage = SessionStage::Inserting;
+#[cfg(not(any(windows, target_os = "macos")))]
+#[allow(dead_code)]
+const _STAGE_KEEPALIVE_SUCCESS: SessionStage = SessionStage::Success;
 
 impl Default for SessionStage {
     fn default() -> Self {
@@ -32,10 +47,12 @@ pub struct SessionStatusPayload {
     pub is_recording: bool,
     pub elapsed_ms: Option<u64>,
     pub error: Option<String>,
+    // Reserved for future use (e.g. transcript preview in the main window).
     pub last_text_preview: Option<String>,
     pub last_text_available: bool,
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MicLevelPayload {
     pub rms: f32,
@@ -51,17 +68,23 @@ struct Inner {
     status_message: Option<String>,
     status_message_expires_at: Option<Instant>,
     session_id: u64,
+
+    // When we stop recording we run the session pipeline (transcribe/enhance/insert)
+    // in a background task so the UI stays responsive and we can cancel it.
+    processing_task: Option<tauri::async_runtime::JoinHandle<()>>,
 }
 
 #[derive(Clone, Default)]
 pub struct SessionController {
+    #[allow(dead_code)]
     inner: Arc<Mutex<Inner>>,
 }
 
 impl SessionController {
     const MAX_RECORDING_DURATION: Duration = Duration::from_secs(120);
     const BUSY_TOAST_TTL: Duration = Duration::from_secs(1);
-    const OVERLAY_HIDE_DELAY: Duration = Duration::from_millis(450);
+    // Design-draft: Success state must remain visible for 1500ms before exit.
+    const OVERLAY_HIDE_DELAY: Duration = Duration::from_millis(1500);
 
     pub fn new() -> Self {
         Self::default()
@@ -76,6 +99,7 @@ impl SessionController {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn get_status(&self) -> SessionStatusPayload {
         let mut inner = self.inner.lock().await;
         Self::prune_status_message(&mut inner);
@@ -98,7 +122,11 @@ impl SessionController {
             elapsed_ms,
             error: inner.status_message.clone(),
             last_text_preview,
-            last_text_available: inner.last_text.as_ref().map(|t| !t.is_empty()).unwrap_or(false),
+            last_text_available: inner
+                .last_text
+                .as_ref()
+                .map(|t| !t.is_empty())
+                .unwrap_or(false),
         }
     }
 
@@ -124,12 +152,17 @@ impl SessionController {
             elapsed_ms,
             error: inner.status_message.clone(),
             last_text_preview,
-            last_text_available: inner.last_text.as_ref().map(|t| !t.is_empty()).unwrap_or(false),
+            last_text_available: inner
+                .last_text
+                .as_ref()
+                .map(|t| !t.is_empty())
+                .unwrap_or(false),
         };
 
         let _ = app.emit(crate::EVENT_SESSION_STATUS, payload);
     }
 
+    #[cfg(any(windows, target_os = "macos"))]
     pub async fn emit_mic_level(&self, app: &tauri::AppHandle, rms: f32, peak: f32) {
         let _ = app.emit(
             crate::EVENT_MIC_LEVEL,
@@ -173,6 +206,7 @@ impl SessionController {
         self.emit_status(app).await;
     }
 
+    #[allow(dead_code)]
     pub async fn set_last_text(&self, text: Option<String>) {
         let mut inner = self.inner.lock().await;
         inner.last_text = text;
@@ -190,7 +224,7 @@ impl SessionController {
 
         let should_hide = {
             let inner = self.inner.lock().await;
-            inner.session_id == session_id && inner.stage != SessionStage::Recording
+            inner.session_id == session_id && matches!(inner.stage, SessionStage::Success | SessionStage::Cancelled)
         };
 
         if should_hide {
@@ -209,69 +243,112 @@ impl SessionController {
         self.emit_status(app).await;
     }
 
+    #[allow(dead_code)]
     async fn mark_error(&self, app: &tauri::AppHandle, error: String) {
         self.set_stage(app, SessionStage::Error).await;
-        self.set_status_message(app, error, Duration::from_secs(6)).await;
+        self.set_status_message(app, error, Duration::from_secs(6))
+            .await;
     }
 
     pub async fn cancel_recording(&self, app: &tauri::AppHandle, svc: AppService) -> ToggleResult {
         let stage = { self.inner.lock().await.stage };
-        if stage != SessionStage::Recording {
-            self.set_status_message(app, "not recording".into(), Self::BUSY_TOAST_TTL)
-                .await;
-            return ToggleResult {
-                stage: "idle".into(),
-                final_text: None,
-                error: Some("not recording".into()),
-                is_recording: false,
-            };
-        }
+        match stage {
+            SessionStage::Recording => {
+                #[cfg(any(windows, target_os = "macos"))]
+                {
+                    if let Err(e) = svc.cancel_recording().await {
+                        self.mark_error(app, e.to_string()).await;
+                        return ToggleResult {
+                            stage: "error".into(),
+                            final_text: None,
+                            error: Some(e.to_string()),
+                            is_recording: false,
+                        };
+                    }
+                }
 
-        #[cfg(windows)]
-        {
-            if let Err(e) = svc.cancel_recording().await {
-                self.mark_error(app, e.to_string()).await;
-                return ToggleResult {
-                    stage: "error".into(),
-                    final_text: None,
-                    error: Some(e.to_string()),
-                    is_recording: false,
+                #[cfg(not(any(windows, target_os = "macos")))]
+                {
+                    let _ = svc;
+                }
+
+                // Defensive: if we somehow still have a processing task, abort it.
+                if let Some(task) = self.inner.lock().await.processing_task.take() {
+                    task.abort();
+                }
+
+                // Bump the session id so any pending work/hide from the previous session can't win.
+                let session_id = {
+                    let mut inner = self.inner.lock().await;
+                    inner.session_id = inner.session_id.wrapping_add(1);
+                    inner.session_id
                 };
-            }
-        }
 
-        #[cfg(not(windows))]
-        {
-            let _ = svc;
-        }
+                self.set_stage(app, SessionStage::Cancelled).await;
+                Self::show_overlay(app);
 
-        self.set_stage(app, SessionStage::Cancelled).await;
-        Self::show_overlay(app);
-
-        // Bump the session id so any pending hide from the previous session can't win.
-        let session_id = {
-            let mut inner = self.inner.lock().await;
-            inner.session_id = inner.session_id.wrapping_add(1);
-            inner.session_id
-        };
-        {
+                {
                     let controller = self.clone();
                     let app_handle = app.clone();
-                    let _controller_for_cb = controller.clone();
-                    let _app_handle_for_cb = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        controller
+                            .hide_overlay_if_session_matches(&app_handle, session_id)
+                            .await;
+                    });
+                }
 
-            tauri::async_runtime::spawn(async move {
-                controller
-                    .hide_overlay_if_session_matches(&app_handle, session_id)
+                ToggleResult {
+                    stage: "cancelled".into(),
+                    final_text: None,
+                    error: None,
+                    is_recording: false,
+                }
+            }
+            SessionStage::Transcribing | SessionStage::Enhancing | SessionStage::Inserting => {
+                let _ = svc;
+
+                // Invalidate the current session and abort the in-flight pipeline task.
+                let (session_id, task) = {
+                    let mut inner = self.inner.lock().await;
+                    inner.session_id = inner.session_id.wrapping_add(1);
+                    (inner.session_id, inner.processing_task.take())
+                };
+
+                if let Some(task) = task {
+                    task.abort();
+                }
+
+                self.set_stage(app, SessionStage::Cancelled).await;
+                Self::show_overlay(app);
+
+                {
+                    let controller = self.clone();
+                    let app_handle = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        controller
+                            .hide_overlay_if_session_matches(&app_handle, session_id)
+                            .await;
+                    });
+                }
+
+                ToggleResult {
+                    stage: "cancelled".into(),
+                    final_text: None,
+                    error: None,
+                    is_recording: false,
+                }
+            }
+            _ => {
+                let _ = svc;
+                self.set_status_message(app, "not recording".into(), Self::BUSY_TOAST_TTL)
                     .await;
-            });
-        }
-
-        ToggleResult {
-            stage: "cancelled".into(),
-            final_text: None,
-            error: None,
-            is_recording: false,
+                ToggleResult {
+                    stage: "idle".into(),
+                    final_text: None,
+                    error: Some("not recording".into()),
+                    is_recording: false,
+                }
+            }
         }
     }
 
@@ -283,7 +360,7 @@ impl SessionController {
         let stage = { self.inner.lock().await.stage };
 
         match stage {
-            SessionStage::Idle | SessionStage::Done | SessionStage::Error | SessionStage::Cancelled => {
+            SessionStage::Idle | SessionStage::Error | SessionStage::Cancelled | SessionStage::Success => {
                 self.set_stage(app, SessionStage::Recording).await;
                 Self::show_overlay(app);
 
@@ -318,7 +395,7 @@ impl SessionController {
                     });
                 }
 
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "macos"))]
                 {
                     let controller = self.clone();
                     let app_handle = app.clone();
@@ -355,13 +432,13 @@ impl SessionController {
                                 }
                                 guard.last_emit = now;
 
-                                let (rms, peak) = crate::session_controller::compute_levels(chunk);
-                                guard.smoothed_rms = crate::session_controller::smooth_level(
+                                let (rms, peak) = compute_levels(chunk);
+                                guard.smoothed_rms = smooth_level(
                                     guard.smoothed_rms,
                                     rms,
                                     dt,
                                 );
-                                guard.smoothed_peak = crate::session_controller::smooth_level(
+                                guard.smoothed_peak = smooth_level(
                                     guard.smoothed_peak,
                                     peak,
                                     dt,
@@ -384,11 +461,13 @@ impl SessionController {
                         })
                         .await
                     {
-                        controller.mark_error(&app_handle, e.to_string()).await;
+                        log::error!("start_recording failed: {e}");
+                        let msg = voicewin_appcore::service::user_facing_audio_error(&e);
+                        controller.mark_error(&app_handle, msg.clone()).await;
                         return ToggleResult {
                             stage: "error".into(),
                             final_text: None,
-                            error: Some(e.to_string()),
+                            error: Some(msg),
                             is_recording: false,
                         };
                     }
@@ -408,7 +487,7 @@ impl SessionController {
                     let _ = w.show();
                 }
 
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "macos"))]
                 {
                     let audio = match svc.clone().stop_recording().await {
                         Ok(a) => a,
@@ -423,65 +502,146 @@ impl SessionController {
                         }
                     };
 
-                    // Run engine pipeline.
-                    let res = svc
-                        .clone()
-                        .run_session(
-                            voicewin_runtime::ipc::RunSessionRequest {
-                                transcript: String::new(),
-                            },
-                            audio,
-                        )
-                        .await;
+                    // Snapshot the current session id so a later Cancel can invalidate results.
+                    let session_id = { self.inner.lock().await.session_id };
 
-                    match res {
-                        Ok(r) => {
-                            self.set_last_text(r.final_text.clone()).await;
-                            self.set_stage(app, SessionStage::Done).await;
+                    // Run the session pipeline in a background task so the UI remains responsive
+                    // and the Cancel button can abort the in-flight work.
+                    let controller = self.clone();
+                    let app_handle = app.clone();
+                    let svc_for_task = svc.clone();
 
-                // After entering Recording, the session id was incremented in `set_stage`.
-                let session_id = { self.inner.lock().await.session_id };
-                            {
-                                let controller = self.clone();
-                                let app_handle = app.clone();
-                                tauri::async_runtime::spawn(async move {
+                    let handle = tauri::async_runtime::spawn(async move {
+                        let controller_for_hook = controller.clone();
+                        let app_for_hook = app_handle.clone();
+
+                        let res = svc_for_task
+                            .clone()
+                            .run_session_with_hook(
+                                voicewin_runtime::ipc::RunSessionRequest {
+                                    transcript: String::new(),
+                                },
+                                audio,
+                                move |stage| {
+                                    let controller_for_hook = controller_for_hook.clone();
+                                    let app_for_hook = app_for_hook.clone();
+                                    async move {
+                                        // Map engine stage labels to overlay stages.
+                                        match stage {
+                                            "transcribing" => {
+                                                controller_for_hook
+                                                    .set_stage(&app_for_hook, SessionStage::Transcribing)
+                                                    .await;
+                                            }
+                                            "enhancing" => {
+                                                controller_for_hook
+                                                    .set_stage(&app_for_hook, SessionStage::Enhancing)
+                                                    .await;
+                                            }
+                                            "inserting" => {
+                                                controller_for_hook
+                                                    .set_stage(&app_for_hook, SessionStage::Inserting)
+                                                    .await;
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                },
+                            )
+                            .await;
+
+                        // Mark the background task as finished (best-effort).
+                        {
+                            let mut inner = controller.inner.lock().await;
+                            inner.processing_task = None;
+                        }
+
+                        // Ignore late results from a cancelled/replaced session.
+                        let still_current = {
+                            let inner = controller.inner.lock().await;
+                            inner.session_id == session_id
+                        };
+                        if !still_current {
+                            return;
+                        }
+
+                        match res {
+                            Ok(r) => {
+                                controller.set_last_text(r.final_text.clone()).await;
+
+                                if r.stage == "done" {
+                                    controller.set_stage(&app_handle, SessionStage::Success).await;
+
+                                    // After entering Recording, the session id was incremented in `set_stage`.
+                                    let session_id = { controller.inner.lock().await.session_id };
+                                    let controller2 = controller.clone();
+                                    let app_handle2 = app_handle.clone();
+
+                                    tauri::async_runtime::spawn(async move {
+                                        controller2
+                                            .hide_overlay_if_session_matches(&app_handle2, session_id)
+                                            .await;
+                                    });
+                                } else if r.stage == "failed" {
+                                    // Insertion failed but the text should be recoverable via History.
+                                    controller.set_stage(&app_handle, SessionStage::Error).await;
+
+                                    // Preserve the underlying error string so the overlay can provide
+                                    // actionable shortcuts (e.g. Accessibility settings on macOS).
+                                    let msg = r
+                                        .error
+                                        .clone()
+                                        .unwrap_or_else(|| "Could not insert. Saved to History.".into());
                                     controller
-                                        .hide_overlay_if_session_matches(&app_handle, session_id)
+                                        .set_status_message(
+                                            &app_handle,
+                                            msg,
+                                            Duration::from_secs(6),
+                                        )
                                         .await;
-                                });
+                                    Self::show_overlay(&app_handle);
+                                } else {
+                                    controller.set_stage(&app_handle, SessionStage::Error).await;
+                                    Self::show_overlay(&app_handle);
+                                }
                             }
-
-                            ToggleResult {
-                                stage: r.stage,
-                                final_text: r.final_text,
-                                error: r.error,
-                                is_recording: false,
-                            }
-                        }
-                        Err(e) => {
-                            self.mark_error(app, e.to_string()).await;
-                            Self::show_overlay(app);
-
-                            ToggleResult {
-                                stage: "error".into(),
-                                final_text: None,
-                                error: Some(e.to_string()),
-                                is_recording: false,
+                            Err(e) => {
+                                controller.mark_error(&app_handle, e.to_string()).await;
+                                Self::show_overlay(&app_handle);
                             }
                         }
+                    });
+
+                    {
+                        let mut inner = self.inner.lock().await;
+                        if let Some(prev) = inner.processing_task.take() {
+                            prev.abort();
+                        }
+                        inner.processing_task = Some(handle);
+                    }
+
+                    ToggleResult {
+                        stage: "transcribing".into(),
+                        final_text: None,
+                        error: None,
+                        is_recording: false,
                     }
                 }
 
-                #[cfg(not(windows))]
+                #[cfg(not(any(windows, target_os = "macos")))]
                 {
                     let _ = svc;
                     self.set_stage(app, SessionStage::Error).await;
-                    self.set_status_message(app, "recording only supported on Windows".into(), Duration::from_secs(3))
-                        .await;
+                    self.set_status_message(
+                        app,
+                        "recording supported on Windows and macOS".into(),
+                        Duration::from_secs(3),
+                    )
+                    .await;
                     ToggleResult {
                         stage: "error".into(),
                         final_text: None,
-                        error: Some("recording only supported on Windows".into()),
+                        error: Some("recording supported on Windows and macOS".into()),
                         is_recording: false,
                     }
                 }
@@ -516,7 +676,7 @@ fn stage_label(stage: SessionStage) -> &'static str {
         SessionStage::Transcribing => "transcribing",
         SessionStage::Enhancing => "enhancing",
         SessionStage::Inserting => "inserting",
-        SessionStage::Done => "done",
+        SessionStage::Success => "success",
         SessionStage::Error => "error",
         SessionStage::Cancelled => "cancelled",
     }
@@ -532,6 +692,7 @@ fn preview_text(text: &str) -> String {
     trimmed.chars().take(MAX).collect::<String>() + "…"
 }
 
+#[allow(dead_code)]
 pub fn compute_levels(samples: &[f32]) -> (f32, f32) {
     if samples.is_empty() {
         return (0.0, 0.0);
@@ -552,6 +713,7 @@ pub fn compute_levels(samples: &[f32]) -> (f32, f32) {
     (rms.clamp(0.0, 1.0), peak.clamp(0.0, 1.0))
 }
 
+#[allow(dead_code)]
 pub fn smooth_level(prev: f32, next: f32, dt: Duration) -> f32 {
     // Exponential smoothing with a 150ms time constant.
     let tau = 0.15f32;
@@ -559,26 +721,5 @@ pub fn smooth_level(prev: f32, next: f32, dt: Duration) -> f32 {
     prev + (next - prev) * alpha
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn levels_are_zero_for_empty() {
-        assert_eq!(compute_levels(&[]), (0.0, 0.0));
-    }
-
-    #[test]
-    fn levels_detect_peak_and_rms() {
-        let (rms, peak) = compute_levels(&[0.0, 1.0, -1.0, 0.0]);
-        assert!((peak - 1.0).abs() < 1e-6);
-        assert!(rms > 0.0);
-    }
-
-    #[test]
-    fn smooth_moves_towards_target() {
-        let out = smooth_level(0.0, 1.0, Duration::from_millis(50));
-        assert!(out > 0.0);
-        assert!(out < 1.0);
-    }
-}
+// No unit tests here: this file is a Tauri implementation detail and these helpers are
+// only used when the recording path is enabled on the current OS.

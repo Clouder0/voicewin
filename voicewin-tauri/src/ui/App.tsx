@@ -1,115 +1,118 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { HistoryPage } from './HistoryPage';
+import { ModelsPage } from './ModelsPage';
+import { OverviewPage } from './OverviewPage';
+import { ProfilesPage } from './ProfilesPage';
 
-// In real app, we will use @tauri-apps/api/core.invoke to call Rust commands.
-// For unit tests and non-tauri browser runs, we keep this component pure.
+type Page = 'overview' | 'profiles' | 'models' | 'history';
 
-import { createMockInvoker, type Invoker } from '../lib/invoker';
-import { Settings } from './Settings';
 
-type Props = {
-  invoker?: Invoker;
-};
+function PageContainer({ children }: { children: React.ReactNode }) {
+  return <div className="vw-page vw-pageEnter">{children}</div>;
+}
 
-export function App({ invoker }: Props) {
-  const api = invoker ?? createMockInvoker();
+export function App() {
+  const [page, setPage] = useState<Page>('overview');
 
-  const [status, setStatus] = useState({ stage: 'idle' } as { stage: string; final_text?: string; error?: string });
-  const [transcript, setTranscript] = useState('rewrite hello team rewrite');
+  useEffect(() => {
+    let unlisten: null | (() => void) = null;
 
-  const summary = useMemo(() => (status.final_text ? 'Ready' : 'Idle'), [status.final_text]);
+    async function start() {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        unlisten = await listen<Page>('voicewin://navigate', (e) => {
+          const dest = e.payload;
+          if (dest === 'overview' || dest === 'profiles' || dest === 'models' || dest === 'history') {
+            setPage(dest);
+          }
+        });
+      } catch {
+        // Not running inside Tauri.
+      }
+    }
+
+    void start();
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  const content = useMemo(() => {
+    switch (page) {
+      case 'overview':
+        return (
+          <PageContainer>
+            <OverviewPage />
+          </PageContainer>
+        );
+      case 'profiles':
+        return (
+          <PageContainer>
+            <ProfilesPage />
+          </PageContainer>
+        );
+      case 'models':
+        return (
+          <PageContainer>
+            <ModelsPage />
+          </PageContainer>
+        );
+      case 'history':
+        return (
+          <PageContainer>
+            <HistoryPage />
+          </PageContainer>
+        );
+    }
+  }, [page]);
 
   return (
-    <div className="container">
-      <div className="header">
-        <div>
-          <div className="title">VoiceWin</div>
-          <div className="subtitle">Outline UI · Tauri v2 · Windows target</div>
-        </div>
-        <div className="badge">stage={status.stage}</div>
-      </div>
+    <div className="vw-shell">
+      <nav className="vw-navRail" aria-label="Navigation">
+        <button
+          type="button"
+          className="vw-navItem"
+          data-active={page === 'overview'}
+          onClick={() => setPage('overview')}
+          aria-label="Overview"
+          title="Overview"
+        >
+          ◎
+        </button>
+        <button
+          type="button"
+          className="vw-navItem"
+          data-active={page === 'profiles'}
+          onClick={() => setPage('profiles')}
+          aria-label="Profiles"
+          title="Profiles"
+        >
+          ◧
+        </button>
+        <button
+          type="button"
+          className="vw-navItem"
+          data-active={page === 'models'}
+          onClick={() => setPage('models')}
+          aria-label="Models"
+          title="Models"
+        >
+          ◼
+        </button>
+        <button
+          type="button"
+          className="vw-navItem"
+          data-active={page === 'history'}
+          onClick={() => setPage('history')}
+          aria-label="History"
+          title="History"
+        >
+          ≡
+        </button>
+      </nav>
 
-      <div className="grid">
-        <div className="card">
-          <div className="row" style={{ justifyContent: 'space-between' }}>
-            <div>
-              <div style={{ fontSize: 13, letterSpacing: 0.4 }}>Session</div>
-              <div className="small">Run a mock session from the UI.</div>
-            </div>
-              <div className="row" style={{ gap: 8 }}>
-                 <button
-                   type="button"
-                   className="button"
-                   onClick={async () => {
-                     setStatus({ stage: 'running' });
-                     try {
-                       const res = await api.toggleRecording();
-                       setStatus(res);
-                     } catch (e) {
-                       setStatus({ stage: 'error', error: String(e) });
-                     }
-                   }}
-                 >
-                   Toggle Recording
-                 </button>
-
-                 <button
-                   type="button"
-                   className="button"
-                   onClick={async () => {
-                     setStatus({ stage: 'running' });
-                     try {
-                       const res = await api.cancelRecording();
-                       setStatus(res);
-                     } catch (e) {
-                       setStatus({ stage: 'error', error: String(e) });
-                     }
-                   }}
-                 >
-                   Cancel Recording
-                 </button>
-
-                <button
-                  type="button"
-                  className="button"
-                  onClick={async () => {
-                    setStatus({ stage: 'running' });
-                    try {
-                      const res = await api.runSession({ transcript });
-                      setStatus(res);
-                    } catch (e) {
-                      setStatus({ stage: 'error', error: String(e) });
-                    }
-                  }}
-                >
-                  Run
-                </button>
-              </div>
-
-          </div>
-
-          <div className="hr" />
-
-          <div className="kv">
-            <b>Transcript</b>
-            <input
-              className="input"
-              value={transcript}
-              onChange={(e) => setTranscript(e.target.value)}
-              aria-label="transcript"
-            />
-
-            <b>Result</b>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>
-              {status.error ? `Error: ${status.error}` : status.final_text ?? '—'}
-            </div>
-
-            <b>Summary</b>
-            <div>{summary}</div>
-          </div>
-        </div>
-
-        <Settings invoker={api} />
-      </div>
+      <main className="vw-content">{content}</main>
     </div>
   );
 }

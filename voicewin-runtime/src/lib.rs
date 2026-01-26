@@ -1,10 +1,10 @@
 pub mod config_store;
 pub mod defaults;
+pub mod history;
 pub mod ipc;
 pub mod llm;
 pub mod local_stt;
 pub mod models;
-pub mod history;
 pub mod runtime_engine;
 pub mod secrets;
 pub mod stt;

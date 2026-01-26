@@ -73,6 +73,12 @@ pub struct GlobalDefaults {
     pub llm_base_url: String,
     pub llm_model: String,
 
+    /// Optional preferred microphone device name.
+    ///
+    /// When `None`, the system default input device is used.
+    #[serde(default)]
+    pub microphone_device: Option<String>,
+
     #[serde(default = "default_history_enabled")]
     pub history_enabled: bool,
 
@@ -80,6 +86,8 @@ pub struct GlobalDefaults {
 }
 
 fn default_history_enabled() -> bool {
+    // History is always enabled in the design-draft UI.
+    // Keeping a default here ensures older configs remain valid.
     true
 }
 
@@ -96,7 +104,12 @@ pub struct EffectiveConfig {
 
     pub context: crate::context::ContextToggles,
 
+    // The active profile resolved for the current foreground app.
     pub matched_profile_id: Option<ProfileId>,
+
+    // The resolved profile name for UI display.
+    #[serde(default)]
+    pub matched_profile_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -133,6 +146,7 @@ pub fn resolve_effective_config(
         llm_model: defaults.llm_model.clone(),
         context: defaults.context.clone(),
         matched_profile_id: matched_profile.map(|p| p.id.clone()),
+        matched_profile_name: matched_profile.map(|p| p.name.clone()),
     };
 
     // 2) Apply profile overrides.
@@ -216,6 +230,7 @@ mod tests {
             language: "en".into(),
             llm_base_url: "http://localhost".into(),
             llm_model: "gpt-4o-mini".into(),
+            microphone_device: None,
             history_enabled: true,
             context: crate::context::ContextToggles::default(),
         };

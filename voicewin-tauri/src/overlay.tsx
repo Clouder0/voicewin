@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 
 import { Overlay } from './ui/Overlay';
+import './ui/tokens.css';
 import './ui/styles.css';
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(

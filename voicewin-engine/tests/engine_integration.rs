@@ -126,6 +126,7 @@ async fn end_to_end_session_uses_power_mode_and_llm() {
         language: "en".into(),
         llm_base_url: server.uri(),
         llm_model: "gpt-4o-mini".into(),
+        microphone_device: None,
         history_enabled: true,
         context: voicewin_core::context::ContextToggles::default(),
     };

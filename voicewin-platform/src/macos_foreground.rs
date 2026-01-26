@@ -15,9 +15,8 @@ pub fn get_foreground_app_identity() -> anyhow::Result<AppIdentity> {
     // SAFETY: Accessing AppKit APIs is generally expected on the main thread,
     // but in practice reading `frontmostApplication` is commonly done off-main.
     // If this causes issues, we can move it behind a main-thread dispatcher.
-    let app: Option<Retained<NSRunningApplication>> = unsafe {
-        NSWorkspace::sharedWorkspace().frontmostApplication()
-    };
+    let app: Option<Retained<NSRunningApplication>> =
+        unsafe { NSWorkspace::sharedWorkspace().frontmostApplication() };
 
     let mut out = AppIdentity::new();
     let Some(app) = app else {

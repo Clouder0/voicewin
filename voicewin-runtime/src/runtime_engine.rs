@@ -4,9 +4,9 @@ use voicewin_core::config::AppConfig;
 use voicewin_engine::engine::{EngineConfig, VoicewinEngine};
 use voicewin_engine::traits::{AppContextProvider, Inserter, LlmProvider, SttProvider};
 
-use crate::local_stt::LocalWhisperSttProvider;
 use crate::llm::OpenAiCompatibleLlmProvider;
-use crate::secrets::{get_secret, SecretKey};
+use crate::local_stt::LocalWhisperSttProvider;
+use crate::secrets::{SecretKey, get_secret};
 use crate::stt::ElevenLabsSttProvider;
 use crate::stt_router::SttRouter;
 
@@ -57,6 +57,8 @@ impl SttProvider for RouterProvider {
         model: &str,
         language: &str,
     ) -> anyhow::Result<voicewin_engine::traits::Transcript> {
-        self.router.transcribe(audio, provider, model, language).await
+        self.router
+            .transcribe(audio, provider, model, language)
+            .await
     }
 }
