@@ -85,7 +85,7 @@ export function HistoryPage() {
 
         {rows.map((r) => {
           const app = r.app_process_name ?? '—';
-          const text = r.text;
+          const text = r.text && r.text.trim().length > 0 ? r.text : (r.error ?? '');
 
           return (
             <div

@@ -217,7 +217,14 @@ impl AppService {
         };
 
         if history_enabled {
-            if let Some(text) = final_text.clone() {
+            let should_write = final_text
+                .as_ref()
+                .map(|t| !t.trim().is_empty())
+                .unwrap_or(false)
+                || error.is_some();
+
+            if should_write {
+                let text = final_text.clone().unwrap_or_default();
                 let ts = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()

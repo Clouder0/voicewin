@@ -23,7 +23,7 @@ struct OverlayMovedPayload {
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 #[cfg(windows)]
-use window_vibrancy::{apply_acrylic, apply_tabbed};
+use window_vibrancy::apply_tabbed;
 
 #[cfg(target_os = "linux")]
 fn load_tray_icon(app: &tauri::AppHandle) -> Option<tauri::image::Image<'static>> {
@@ -226,8 +226,26 @@ async fn build_service(app: &tauri::AppHandle) -> anyhow::Result<AppService> {
     let inserter: Arc<dyn voicewin_engine::traits::Inserter> =
         Arc::new(voicewin_platform::test::StdoutInserter);
 
+    let svc = AppService::new(config_path, ctx, inserter);
+
+    // Tray/hotkey flows can start sessions without ever opening the main UI.
+    // Ensure config exists (and is valid) during service initialization so
+    // `run_session_with_hook` never fails due to a missing config file.
+    match load_or_init_config(&svc, app) {
+        Ok(cfg) => {
+            if let Err(e) = validate_config(&cfg) {
+                log::warn!("config invalid; resetting to defaults: {e}");
+                init_default_config(&svc, app).map_err(anyhow::Error::msg)?;
+            }
+        }
+        Err(e) => {
+            log::error!("failed to load/init config: {e}");
+            return Err(anyhow::Error::msg(e));
+        }
+    }
+
     log::info!("build_service done");
-    Ok(AppService::new(config_path, ctx, inserter))
+    Ok(svc)
 }
 
 fn init_default_config(svc: &AppService, app: &tauri::AppHandle) -> Result<AppConfig, String> {
@@ -1043,11 +1061,9 @@ fn main() {
             .inner_size(240.0, 72.0)
             .build()?;
 
-            // Apply Acrylic to overlay (best-effort; Windows-only).
-            #[cfg(windows)]
-            {
-                let _ = apply_acrylic(&overlay, Some((0, 0, 0, 0)));
-            }
+            // Do NOT apply Acrylic to the overlay window.
+            // It affects the entire webview surface, making the overlay look like a grey rectangle
+            // instead of a floating pill. We rely on the CSS pill styling instead.
 
             // Apply Mica Alt (tabbed) to the main window (best-effort; Windows-only).
             #[cfg(windows)]
@@ -1361,7 +1377,7 @@ fn main() {
                 let session = session.clone();
                 let svc_cell = app_state.service.clone();
 
-                let _ = app_handle.global_shortcut().on_shortcut(
+                match app_handle.global_shortcut().on_shortcut(
                     hotkey.as_str(),
                     move |app, _shortcut, event| {
                         if event.state != ShortcutState::Pressed {
@@ -1378,13 +1394,19 @@ fn main() {
                                 .await
                             {
                                 Ok(s) => s,
-                                Err(_) => return,
+                                Err(e) => {
+                                    log::error!("hotkey service init failed: {e}");
+                                    return;
+                                }
                             };
 
                             let _ = session.toggle_recording(&app, svc.clone()).await;
                         });
                     },
-                );
+                ) {
+                    Ok(_) => log::info!("registered hotkey: {hotkey}"),
+                    Err(e) => log::error!("failed to register hotkey {hotkey}: {e}"),
+                }
             }
 
             let _ = tray;

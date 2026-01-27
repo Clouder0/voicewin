@@ -251,6 +251,7 @@ impl SessionController {
 
     #[allow(dead_code)]
     async fn mark_error(&self, app: &tauri::AppHandle, error: String) {
+        log::error!("session error: {error}");
         self.set_stage(app, SessionStage::Error).await;
         self.set_status_message(app, error, Duration::from_secs(6))
             .await;
@@ -509,6 +510,20 @@ impl SessionController {
                         }
                     };
 
+                    let n = audio.samples.len();
+                    let ms = (n as f64 / 16_000.0) * 1000.0;
+                    log::info!("captured audio: {n} samples (~{ms:.0}ms)");
+                    if n < 160 {
+                        let msg = "No audio captured from the microphone.".to_string();
+                        self.mark_error(app, msg.clone()).await;
+                        return ToggleResult {
+                            stage: "error".into(),
+                            final_text: None,
+                            error: Some(msg),
+                            is_recording: false,
+                        };
+                    }
+
                     // Snapshot the current session id so a later Cancel can invalidate results.
                     let session_id = { self.inner.lock().await.session_id };
 
@@ -599,6 +614,8 @@ impl SessionController {
                                         .error
                                         .clone()
                                         .unwrap_or_else(|| "Could not insert. Saved to History.".into());
+
+                                    log::error!("session failed stage=failed: {msg}");
                                     controller
                                         .set_status_message(
                                             &app_handle,
