@@ -36,7 +36,7 @@
     "targets": ["nsis", "dmg"],
     "license": "GPL-3.0-only",
     "resources": [
-      "resources/models/bootstrap.gguf"
+      "resources/models/bootstrap.bin"
     ],
     "macOS": {
       "infoPlist": "Info.plist"

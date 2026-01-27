@@ -143,9 +143,9 @@ fn ensure_bootstrap_model(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
 
     for rel in [
         // Most common layout: resources include the file under `models/`.
-        "models/bootstrap.gguf",
+        "models/bootstrap.bin",
         // If the bundler preserved the `resources/` prefix.
-        "resources/models/bootstrap.gguf",
+        "resources/models/bootstrap.bin",
     ] {
         if let Ok(p) = app.path().resolve(rel, tauri::path::BaseDirectory::Resource) {
             tried.push(p.clone());
@@ -158,7 +158,7 @@ fn ensure_bootstrap_model(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
 
     // Extra fallbacks for portable/no-bundle layouts (adjacent to the executable).
     if src.is_none() {
-        for rel in ["models/bootstrap.gguf", "resources/models/bootstrap.gguf"] {
+        for rel in ["models/bootstrap.bin", "resources/models/bootstrap.bin"] {
             if let Ok(p) = app.path().resolve(rel, tauri::path::BaseDirectory::Executable) {
                 tried.push(p.clone());
                 if p.exists() {
@@ -231,15 +231,21 @@ async fn build_service(app: &tauri::AppHandle) -> anyhow::Result<AppService> {
     // Tray/hotkey flows can start sessions without ever opening the main UI.
     // Ensure config exists (and is valid) during service initialization so
     // `run_session_with_hook` never fails due to a missing config file.
-    match load_or_init_config(&svc, app) {
-        Ok(cfg) => {
-            if let Err(e) = validate_config(&cfg) {
-                log::warn!("config invalid; resetting to defaults: {e}");
-                init_default_config(&svc, app).map_err(anyhow::Error::msg)?;
-            }
+    let mut cfg = load_or_init_config(&svc, app).map_err(anyhow::Error::msg)?;
+
+    // If the config is invalid (most commonly: a stale GGUF path), do a targeted migration.
+    if let Err(e) = validate_config(&cfg) {
+        log::warn!("config invalid; attempting auto-migration: {e}");
+
+        let changed = migrate_local_stt_model_path(&mut cfg, app).map_err(anyhow::Error::msg)?;
+        if changed {
+            svc.save_config(&cfg)
+                .map_err(|e| anyhow::Error::msg(e.to_string()))?;
         }
-        Err(e) => {
-            log::error!("failed to load/init config: {e}");
+
+        // Validate again; if it still fails, surface the error instead of wiping settings.
+        if let Err(e) = validate_config(&cfg) {
+            log::error!("config invalid after migration: {e}");
             return Err(anyhow::Error::msg(e));
         }
     }
@@ -251,7 +257,7 @@ async fn build_service(app: &tauri::AppHandle) -> anyhow::Result<AppService> {
 fn init_default_config(svc: &AppService, app: &tauri::AppHandle) -> Result<AppConfig, String> {
     let mut d = voicewin_runtime::defaults::default_global_defaults();
 
-    // Prefer the user-installed large-v3-turbo "preferred" model if present.
+    // Prefer the user-installed "preferred" model if present.
     // Otherwise, fall back to the bundled bootstrap model.
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let preferred = voicewin_runtime::models::choose_default_local_stt_model_path(&app_data_dir);
@@ -279,6 +285,37 @@ fn load_or_init_config(svc: &AppService, app: &tauri::AppHandle) -> Result<AppCo
         Ok(cfg) => Ok(cfg),
         Err(_) => init_default_config(svc, app),
     }
+}
+
+fn migrate_local_stt_model_path(cfg: &mut AppConfig, app: &tauri::AppHandle) -> Result<bool, String> {
+    if cfg.defaults.stt_provider != "local" {
+        return Ok(false);
+    }
+
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+
+    // If the preferred model is present and looks valid, pick it.
+    let preferred = voicewin_runtime::models::installed_preferred_local_stt_model_path(&app_data_dir);
+    if preferred.exists()
+        && voicewin_runtime::models::validate_ggml_file(&preferred, 1024 * 1024).is_ok()
+    {
+        let next = preferred.to_string_lossy().to_string();
+        if cfg.defaults.stt_model != next {
+            cfg.defaults.stt_model = next;
+            return Ok(true);
+        }
+        return Ok(false);
+    }
+
+    // Fall back to the bundled bootstrap model.
+    let bootstrap = ensure_bootstrap_model(app).map_err(|e| e.to_string())?;
+    let next = bootstrap.to_string_lossy().to_string();
+    if cfg.defaults.stt_model != next {
+        cfg.defaults.stt_model = next;
+        return Ok(true);
+    }
+
+    Ok(false)
 }
 
 
@@ -318,7 +355,7 @@ fn normalize_model_path_to_models_dir(
 
 fn validate_config(cfg: &AppConfig) -> Result<(), String> {
     if cfg.defaults.stt_provider == "local" {
-        // For local whisper, `stt_model` must be a path to a GGUF file.
+        // For local whisper, `stt_model` must be a path to a whisper.cpp GGML `.bin` model.
         let p = std::path::Path::new(&cfg.defaults.stt_model);
         if !p.exists() {
             return Err(format!(
@@ -326,7 +363,16 @@ fn validate_config(cfg: &AppConfig) -> Result<(), String> {
                 cfg.defaults.stt_model
             ));
         }
-        voicewin_runtime::models::validate_gguf_file(p, 1024 * 1024).map_err(|e| e.to_string())?;
+
+        // If the file is GGUF, return a clearer error (this is a common migration issue).
+        if voicewin_runtime::models::has_gguf_magic(p).unwrap_or(false) {
+            return Err(format!(
+                "local STT model is GGUF (.gguf), but VoiceWin local STT requires whisper.cpp GGML (.bin) models: {}",
+                cfg.defaults.stt_model
+            ));
+        }
+
+        voicewin_runtime::models::validate_ggml_file(p, 1024 * 1024).map_err(|e| e.to_string())?;
     }
 
     Ok(())
@@ -614,7 +660,7 @@ async fn get_model_status(app: tauri::AppHandle) -> Result<ModelStatus, String> 
 
     let bootstrap_ok = voicewin_runtime::models::validate_bootstrap_model(&bootstrap_path).is_ok();
     let preferred_ok =
-        voicewin_runtime::models::validate_gguf_file(&preferred_path, 50 * 1024 * 1024).is_ok();
+        voicewin_runtime::models::validate_ggml_file(&preferred_path, 50 * 1024 * 1024).is_ok();
 
     Ok(ModelStatus {
         bootstrap_ok,
@@ -737,6 +783,9 @@ async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<(), S
         let dst = models_dir.join(&spec.filename);
         log::info!("download_model dst: {}", dst.display());
         log::info!("download_model url: {}", spec.url);
+        if let Some(alt) = &spec.alt_url {
+            log::info!("download_model url (fallback): {}", alt);
+        }
         let expected_sha = spec.sha256.to_lowercase();
 
         // Stream download into a temp file.
@@ -747,13 +796,44 @@ async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<(), S
 
         let mut f = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
 
-        let req = reqwest::Client::new().get(&spec.url);
-        let resp = req.send().await.map_err(|e| e.to_string())?;
-        let status = resp.status().as_u16();
-        if !(200..=299).contains(&status) {
+        let client = reqwest::Client::new();
+
+        let mut last_err: Option<String> = None;
+        let mut used_url = spec.url.clone();
+        let resp = match client.get(&spec.url).send().await {
+            Ok(r) if r.status().is_success() => r,
+            Ok(r) => {
+                last_err = Some(format!("download failed: status={}", r.status().as_u16()));
+                if let Some(alt) = &spec.alt_url {
+                    used_url = alt.clone();
+                    client.get(alt).send().await.map_err(|e| e.to_string())?
+                } else {
+                    let _ = std::fs::remove_file(&tmp);
+                    return Err(last_err.unwrap_or_else(|| "download failed".into()));
+                }
+            }
+            Err(e) => {
+                last_err = Some(e.to_string());
+                if let Some(alt) = &spec.alt_url {
+                    used_url = alt.clone();
+                    client.get(alt).send().await.map_err(|e| e.to_string())?
+                } else {
+                    let _ = std::fs::remove_file(&tmp);
+                    return Err(last_err.unwrap_or_else(|| "download failed".into()));
+                }
+            }
+        };
+
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
             let _ = std::fs::remove_file(&tmp);
+            if let Some(prev) = last_err {
+                return Err(format!("download failed: {prev}; fallback status={status}"));
+            }
             return Err(format!("download failed: status={status}"));
         }
+
+        log::info!("download_model using url: {}", used_url);
 
         let total = resp.content_length();
         log::info!("download_model content_length: {:?}", total);
@@ -817,8 +897,8 @@ async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<(), S
             ));
         }
 
-        // Basic sanity (GGUF magic + non-trivial size).
-        if let Err(e) = voicewin_runtime::models::validate_gguf_file(&tmp, 10 * 1024 * 1024) {
+        // Basic sanity (GGML magic + non-trivial size).
+        if let Err(e) = voicewin_runtime::models::validate_ggml_file(&tmp, 10 * 1024 * 1024) {
             let _ = std::fs::remove_file(&tmp);
             return Err(e.to_string());
         }

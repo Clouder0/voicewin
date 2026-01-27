@@ -44,6 +44,15 @@ impl LocalWhisperSttProvider {
             ));
         }
 
+        // User-friendly error: whisper-rs (whisper.cpp) expects the legacy GGML `.bin` format.
+        // Our app previously used GGUF models; detect that early so the error is actionable.
+        if crate::models::has_gguf_magic(model_path.as_path()).unwrap_or(false) {
+            return Err(anyhow::anyhow!(
+                "local whisper model is GGUF (.gguf), but the local engine requires whisper.cpp GGML (.bin) models: {}",
+                model_path.display()
+            ));
+        }
+
         let ctx = WhisperContext::new_with_params(
             model_path
                 .to_str()
@@ -94,16 +103,17 @@ impl LocalWhisperSttProvider {
             .full(params, &audio.samples)
             .map_err(|e| anyhow::anyhow!("whisper inference failed: {e}"))?;
 
-        let n = state
-            .full_n_segments()
-            .map_err(|e| anyhow::anyhow!("failed reading whisper segments: {e}"))?;
+        let n = state.full_n_segments();
 
         let mut out = String::new();
         for i in 0..n {
             let seg = state
-                .full_get_segment_text(i)
-                .map_err(|e| anyhow::anyhow!("failed reading whisper segment: {e}"))?;
-            out.push_str(seg.trim());
+                .get_segment(i)
+                .ok_or_else(|| anyhow::anyhow!("failed reading whisper segment {i}: out of bounds"))?;
+            let text = seg
+                .to_str_lossy()
+                .map_err(|e| anyhow::anyhow!("failed reading whisper segment {i}: {e}"))?;
+            out.push_str(text.trim());
             if i + 1 < n {
                 out.push(' ');
             }
@@ -126,7 +136,7 @@ impl voicewin_engine::traits::SttProvider for LocalWhisperSttProvider {
             return Err(anyhow::anyhow!("unsupported STT provider: {provider}"));
         }
 
-        // MVP convention: for local whisper, `model` is a filesystem path to a ggml/gguf model.
+        // MVP convention: for local whisper, `model` is a filesystem path to a whisper.cpp GGML `.bin` model.
         let model_path = PathBuf::from(model);
 
         let text = tokio::task::spawn_blocking({

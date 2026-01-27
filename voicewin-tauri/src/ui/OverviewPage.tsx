@@ -206,8 +206,8 @@ export function OverviewPage() {
 
   const modelTitle = useMemo(() => {
     if (!modelStatus) return 'Whisper';
-    if (modelStatus.preferred_ok) return 'Whisper Large';
-    if (modelStatus.bootstrap_ok) return 'Whisper Base';
+    if (modelStatus.preferred_ok) return 'Whisper Base';
+    if (modelStatus.bootstrap_ok) return 'Whisper Tiny';
     return 'Whisper';
   }, [modelStatus]);
 

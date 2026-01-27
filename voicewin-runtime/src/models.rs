@@ -5,25 +5,27 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use sha2::Digest;
 
-pub const BOOTSTRAP_MODEL_FILENAME: &str = "bootstrap.gguf";
+pub const BOOTSTRAP_MODEL_FILENAME: &str = "bootstrap.bin";
 
-// Bundled bootstrap model:
-// https://huggingface.co/FL33TW00D-HF/whisper-base (base_q4k.gguf)
+// Bundled bootstrap model (whisper.cpp GGML format):
+// Source: https://huggingface.co/ggerganov/whisper.cpp (ggml-tiny.bin)
 // We keep the filename stable in-app.
 pub const BOOTSTRAP_MODEL_SHA256: &str =
-    "002978331fb3fb35c9939ff2ca227bf2d6658fc666fe56415fb5eac0a839b60f";
+    "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21";
 
-// ~42MB for base_q4k.gguf. Use a conservative lower bound to catch empty/corrupt bundles.
+// ~75MB for ggml-tiny.bin. Use a conservative lower bound to catch empty/corrupt bundles.
 pub const BOOTSTRAP_MODEL_MIN_BYTES: u64 = 10 * 1024 * 1024;
 
-pub const PREFERRED_LOCAL_STT_MODEL_FILENAME: &str = "whisper-large-v3-turbo-q5_k.gguf";
+// "Preferred" local model filename checked during config initialization.
+// If present, we pick it over the bundled bootstrap.
+pub const PREFERRED_LOCAL_STT_MODEL_FILENAME: &str = "ggml-base-q5_1.bin";
 
 pub fn ensure_dir(path: &Path) -> anyhow::Result<()> {
     fs::create_dir_all(path).with_context(|| format!("failed to create dir: {}", path.display()))
 }
 
 pub fn atomic_copy(src: &Path, dst: &Path) -> anyhow::Result<()> {
-    // Streaming copy so large GGUF files don't spike RAM.
+    // Streaming copy so large model files don't spike RAM.
     // Also handles replacement safely on Windows, where `rename` fails if the destination exists.
     let tmp = dst.with_extension("tmp");
     if let Some(parent) = dst.parent() {
@@ -66,6 +68,18 @@ pub fn has_gguf_magic(path: &Path) -> anyhow::Result<bool> {
     Ok(n == 4 && magic == *b"GGUF")
 }
 
+pub fn has_ggml_magic(path: &Path) -> anyhow::Result<bool> {
+    let mut f =
+        fs::File::open(path).with_context(|| format!("failed to open: {}", path.display()))?;
+    let mut magic = [0u8; 4];
+    let n = f
+        .read(&mut magic)
+        .with_context(|| format!("failed reading: {}", path.display()))?;
+
+    // whisper.cpp's GGML format uses a little-endian u32 magic which appears as "lmgg" bytes.
+    Ok(n == 4 && magic == *b"lmgg")
+}
+
 pub fn validate_gguf_file(path: &Path, min_bytes: u64) -> anyhow::Result<()> {
     let len = file_size_bytes(path)?;
     if len < min_bytes {
@@ -80,6 +94,27 @@ pub fn validate_gguf_file(path: &Path, min_bytes: u64) -> anyhow::Result<()> {
     if !has_gguf_magic(path)? {
         return Err(anyhow::anyhow!(
             "model file is not GGUF (missing magic header): {}",
+            path.display()
+        ));
+    }
+
+    Ok(())
+}
+
+pub fn validate_ggml_file(path: &Path, min_bytes: u64) -> anyhow::Result<()> {
+    let len = file_size_bytes(path)?;
+    if len < min_bytes {
+        return Err(anyhow::anyhow!(
+            "model file too small ({} bytes, expected >= {}): {}",
+            len,
+            min_bytes,
+            path.display()
+        ));
+    }
+
+    if !has_ggml_magic(path)? {
+        return Err(anyhow::anyhow!(
+            "model file is not whisper.cpp GGML (.bin) (missing magic header): {}",
             path.display()
         ));
     }
@@ -114,7 +149,7 @@ pub fn replace_file(tmp: &Path, dst: &Path) -> anyhow::Result<()> {
 }
 
 pub fn validate_bootstrap_model(path: &Path) -> anyhow::Result<()> {
-    validate_gguf_file(path, BOOTSTRAP_MODEL_MIN_BYTES)?;
+    validate_ggml_file(path, BOOTSTRAP_MODEL_MIN_BYTES)?;
 
     let hash = sha256_file(path)?;
     if hash != BOOTSTRAP_MODEL_SHA256 {
@@ -175,6 +210,7 @@ pub struct ModelDownloadSpec {
     pub title: String,
 
     pub url: String,
+    pub alt_url: Option<String>,
 
     // Pinned integrity: many public GGUF repos do not publish sidecar .sha256 files.
     pub sha256: String,
@@ -188,30 +224,29 @@ pub struct ModelDownloadSpec {
 }
 
 pub fn whisper_catalog() -> Vec<ModelDownloadSpec> {
-    // Minimal GGUF catalog with pinned checksums.
-    // Sources: FL33TW00D-HF Whisper GGUF repos.
+    // Minimal GGML (.bin) catalog with pinned checksums.
+    // Source: ggerganov/whisper.cpp models.
+    //
+    // NOTE: `hf-mirror.com` is used as the primary URL because it works in more restrictive
+    // network environments; we keep the official Hugging Face URL as a fallback.
+    const WHISPER_CPP_COMMIT: &str = "5359861c739e955e79d9a303bcbc70fb988958b1";
+
     vec![
         ModelDownloadSpec {
-            id: "whisper-base-q4k".into(),
+            id: "whisper-base-q5_1".into(),
             title: "Whisper Base".into(),
-            url: "https://huggingface.co/FL33TW00D-HF/whisper-base/resolve/main/base_q4k.gguf".into(),
-            sha256: "002978331fb3fb35c9939ff2ca227bf2d6658fc666fe56415fb5eac0a839b60f".into(),
-            filename: "base_q4k.gguf".into(),
-            size_bytes: Some(44_295_968),
-            speed_label: Some("Fast".into()),
-            accuracy_label: Some("Good".into()),
-            recommended: true,
-        },
-        ModelDownloadSpec {
-            id: "whisper-medium-q4k".into(),
-            title: "Whisper Medium".into(),
-            url: "https://huggingface.co/FL33TW00D-HF/whisper-medium/resolve/main/medium_q4k.gguf".into(),
-            sha256: "88f744da1c6cc2273d226839bd28dd98aab988ef915e47b325b82340f135fb34".into(),
-            filename: "medium_q4k.gguf".into(),
-            size_bytes: Some(443_874_912),
-            speed_label: Some("Slow".into()),
+            url: format!(
+                "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/{WHISPER_CPP_COMMIT}/ggml-base-q5_1.bin"
+            ),
+            alt_url: Some(format!(
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/{WHISPER_CPP_COMMIT}/ggml-base-q5_1.bin"
+            )),
+            sha256: "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898".into(),
+            filename: "ggml-base-q5_1.bin".into(),
+            size_bytes: Some(59_707_625),
+            speed_label: Some("Medium".into()),
             accuracy_label: Some("High".into()),
-            recommended: false,
+            recommended: true,
         },
     ]
 }
@@ -230,5 +265,30 @@ mod tests {
             hash,
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
+    }
+
+    #[test]
+    fn detects_ggml_magic_lmgg() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("model.bin");
+
+        // Minimal header for our validator: 4-byte magic + padding.
+        fs::write(&path, [b"lmgg".as_slice(), &[0u8; 8]].concat()).unwrap();
+
+        assert!(has_ggml_magic(&path).unwrap());
+        validate_ggml_file(&path, 4).unwrap();
+    }
+
+    #[test]
+    fn rejects_gguf_when_ggml_expected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("model.gguf");
+        fs::write(&path, [b"GGUF".as_slice(), &[0u8; 8]].concat()).unwrap();
+
+        assert!(has_gguf_magic(&path).unwrap());
+        let err = validate_ggml_file(&path, 4).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("not whisper.cpp GGML"));
     }
 }
