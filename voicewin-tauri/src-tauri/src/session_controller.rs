@@ -498,6 +498,7 @@ impl SessionController {
                     let audio = match svc.clone().stop_recording().await {
                         Ok(a) => a,
                         Err(e) => {
+                            log::error!("stop_recording failed: {e}");
                             self.mark_error(app, e.to_string()).await;
                             return ToggleResult {
                                 stage: "error".into(),

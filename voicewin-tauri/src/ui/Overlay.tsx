@@ -48,6 +48,14 @@ function meterBars(level: number, bars: number): boolean[] {
 export function Overlay() {
   const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent);
 
+  // If we never receive a status update (e.g. event bridge fails), show a minimal
+  // fallback pill so the overlay window is never a blank "stuck" rectangle.
+  const [idleFallback, setIdleFallback] = useState(false);
+  useEffect(() => {
+    const t = window.setTimeout(() => setIdleFallback(true), 300);
+    return () => window.clearTimeout(t);
+  }, []);
+
   const [status, setStatus] = useState<SessionStatusPayload>({
     stage: 'idle',
     stage_label: 'idle',
@@ -99,8 +107,46 @@ export function Overlay() {
     };
   }, []);
 
+  // Best-effort: poll session status briefly on mount.
+  // This helps recover if the overlay window is shown before listeners attach.
+  useEffect(() => {
+    let stop = false;
+
+    async function poll() {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        for (let i = 0; i < 10; i++) {
+          if (stop) return;
+          try {
+            const current = await invoke<SessionStatusPayload>('get_session_status');
+            setStatus(current);
+            if (current.stage !== 'idle') {
+              return;
+            }
+          } catch {
+            // Ignore.
+          }
+          await new Promise((r) => setTimeout(r, 250));
+        }
+      } catch {
+        // Not running inside Tauri.
+      }
+    }
+
+    void poll();
+    return () => {
+      stop = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (status.stage !== 'idle' && idleFallback) {
+      setIdleFallback(false);
+    }
+  }, [idleFallback, status.stage]);
+
   const isVisible =
-    status.stage !== 'idle' && status.stage !== 'cancelled' && status.stage !== 'done';
+    (status.stage !== 'idle' && status.stage !== 'done') || idleFallback;
 
   const [isExiting, setIsExiting] = useState(false);
 
@@ -146,7 +192,7 @@ export function Overlay() {
   // Fit-content sizing: measure pill and ask backend to resize the overlay window.
   // We trigger this when the stage changes (content width changes across states).
   useEffect(() => {
-    const visible = status.stage !== 'idle' && status.stage !== 'cancelled' && status.stage !== 'done';
+    const visible = isVisible && status.stage !== 'done';
     if (!visible) return;
 
     let raf = 0;
@@ -190,7 +236,7 @@ export function Overlay() {
       stop = true;
       if (raf) window.cancelAnimationFrame(raf);
     };
-  }, [status.stage]);
+  }, [isVisible, status.stage]);
 
   const meter = useMemo(() => {
     // Spec: 5 bars, height 4px..24px during recording.
@@ -224,15 +270,18 @@ export function Overlay() {
   };
 
   const pillText = (() => {
+    if (status.stage === 'idle') return 'Starting…';
     if (status.stage === 'recording') return 'Listening...';
     if (status.stage === 'enhancing') return 'Enhancing...';
     if (status.stage === 'transcribing' || status.stage === 'inserting') return 'Thinking...';
     if (status.stage === 'success') return 'Inserted';
-    if (status.stage === 'error') return status.error ? 'Could not insert. Saved to History.' : 'Error';
+    if (status.stage === 'cancelled') return 'Cancelled';
+    if (status.stage === 'error') return status.error ? status.error : 'Error';
     return '';
   })();
 
   const leftKind = (() => {
+    if (status.stage === 'idle') return 'spinner';
     if (status.stage === 'recording') return 'mic';
     if (status.stage === 'transcribing' || status.stage === 'enhancing' || status.stage === 'inserting') return 'spinner';
     if (status.stage === 'success') return 'check';
@@ -386,23 +435,25 @@ export function Overlay() {
                 >
                   History
                 </button>
-                <button
-                  type="button"
-                  className="vw-button vw-button--ghost vw-iconButton"
-                  aria-label="Dismiss"
-                  onClick={async () => {
-                    try {
-                      const { invoke } = await import('@tauri-apps/api/core');
-                      await invoke('overlay_dismiss');
-                    } catch {
-                      // Ignore.
-                    }
-                  }}
-                >
-                  ✕
-                </button>
               </div>
             ) : null}
+
+            {/* Always provide a dismiss button so a broken overlay can't trap the user. */}
+            <button
+              type="button"
+              className="vw-button vw-button--ghost vw-iconButton"
+              aria-label="Dismiss"
+              onClick={async () => {
+                try {
+                  const { invoke } = await import('@tauri-apps/api/core');
+                  await invoke('overlay_dismiss');
+                } catch {
+                  // Ignore.
+                }
+              }}
+            >
+              ✕
+            </button>
           </div>
         </div>
       ) : null}

@@ -101,7 +101,10 @@ pub const EVENT_MIC_LEVEL: &str = "voicewin://mic_level";
 pub const EVENT_TOGGLE_HOTKEY_CHANGED: &str = "voicewin://toggle_hotkey_changed";
 
 struct AppState {
-    service: tokio::sync::OnceCell<AppService>,
+    // IMPORTANT: `tokio::sync::OnceCell` implements `Clone` by creating a NEW cell.
+    // We must wrap it in an `Arc` so all hotkey/tray callbacks share the same service
+    // instance (and thus the same audio recorder state).
+    service: Arc<tokio::sync::OnceCell<AppService>>,
     session: SessionController,
 
     #[cfg(any(windows, target_os = "macos"))]
@@ -933,6 +936,29 @@ async fn open_macos_microphone_settings() -> Result<(), String> {
 }
 
 fn main() {
+    // If we crash/panic on end-user machines, a stderr backtrace is often not available.
+    // Write panics to a predictable temp file to aid debugging.
+    {
+        use std::io::Write;
+        use std::sync::OnceLock;
+
+        static PANIC_LOG_PATH: OnceLock<std::path::PathBuf> = OnceLock::new();
+        let _ = PANIC_LOG_PATH.set(std::env::temp_dir().join("voicewin_panic.log"));
+
+        std::panic::set_hook(Box::new(|info| {
+            let Some(path) = PANIC_LOG_PATH.get() else {
+                return;
+            };
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                let _ = writeln!(f, "{info}");
+            }
+        }));
+    }
+
     // Persist logs to the OS log dir so Windows users can debug issues even in
     // `windows_subsystem = "windows"` builds (no console output).
     use tauri_plugin_log::{Target, TargetKind};
@@ -957,7 +983,7 @@ fn main() {
             }
         }))
         .manage(AppState {
-            service: tokio::sync::OnceCell::new(),
+            service: Arc::new(tokio::sync::OnceCell::new()),
             session: SessionController::new(),
 
             #[cfg(any(windows, target_os = "macos"))]
@@ -1137,6 +1163,9 @@ fn main() {
             let open_history = MenuItemBuilder::new("Open History")
                 .id("open_history")
                 .build(handle)?;
+            let open_logs = MenuItemBuilder::new("Open Logs Folder")
+                .id("open_logs")
+                .build(handle)?;
             let reset_hud_position = MenuItemBuilder::new("Reset HUD Position")
                 .id("reset_hud_position")
                 .build(handle)?;
@@ -1148,6 +1177,7 @@ fn main() {
                     &toggle,
                     &cancel,
                     &open_history,
+                    &open_logs,
                     &reset_hud_position,
                     &quit,
                 ])
@@ -1222,6 +1252,42 @@ fn main() {
                                 let _ = w.set_focus();
                                 // Best-effort: switch to the history tab.
                                 let _ = w.emit("voicewin://navigate", "history");
+                            }
+                        }
+                        "open_logs" => {
+                            // Best-effort: open the app log directory in the OS file manager.
+                            if let Ok(dir) = app.path().app_log_dir() {
+                                #[cfg(windows)]
+                                {
+                                    let _ = std::process::Command::new("explorer")
+                                        .arg(dir)
+                                        .status();
+                                }
+
+                                #[cfg(target_os = "macos")]
+                                {
+                                    let _ = std::process::Command::new("open")
+                                        .arg(dir)
+                                        .status();
+                                }
+
+                                #[cfg(all(not(windows), not(target_os = "macos")))]
+                                {
+                                    let _ = std::process::Command::new("xdg-open")
+                                        .arg(dir)
+                                        .status();
+                                }
+                            }
+
+                            // If that fails, fall back to the panic log file in temp.
+                            #[cfg(windows)]
+                            {
+                                let p = std::env::temp_dir().join("voicewin_panic.log");
+                                if p.exists() {
+                                    let _ = std::process::Command::new("explorer")
+                                        .arg(p)
+                                        .status();
+                                }
                             }
                         }
                         "reset_hud_position" => {
