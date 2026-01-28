@@ -289,9 +289,29 @@ where
         if channels == 1 {
             buf.extend(data.iter().map(|&s| s.to_sample::<f32>()));
         } else {
-            for frame in data.chunks_exact(channels) {
-                let mono = frame.iter().map(|&s| s.to_sample::<f32>()).sum::<f32>() / channels as f32;
-                buf.push(mono);
+            // Many multi-channel microphone devices expose channels where only one channel contains
+            // the user's voice (or channels can be out of phase). A naive signed average can cancel
+            // the signal and produce near-silence.
+            //
+            // Pick the channel with the highest energy for this chunk.
+            let frames = data.len() / channels;
+            let mut best_ch = 0usize;
+            let mut best_energy = -1.0f32;
+
+            for ch in 0..channels {
+                let mut e = 0.0f32;
+                for frame in data.chunks_exact(channels).take(frames) {
+                    let s = frame[ch].to_sample::<f32>();
+                    e += s * s;
+                }
+                if e > best_energy {
+                    best_energy = e;
+                    best_ch = ch;
+                }
+            }
+
+            for frame in data.chunks_exact(channels).take(frames) {
+                buf.push(frame[best_ch].to_sample::<f32>());
             }
         }
 

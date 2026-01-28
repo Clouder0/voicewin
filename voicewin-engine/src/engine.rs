@@ -128,6 +128,17 @@ impl VoicewinEngine {
 
         let mut final_text = filter_transcription_output(&transcript.text);
 
+        // If Whisper produced no usable text (e.g. silence or extremely quiet audio),
+        // do not pretend we "inserted" successfully.
+        if final_text.trim().is_empty() {
+            result.stage = SessionStage::Failed;
+            result.stage_label = Some("failed".into());
+            result.transcript = Some(transcript);
+            result.timings.transcription_ms = Some(transcription_ms);
+            result.error = Some("No speech detected. Try speaking louder or selecting the correct microphone.".into());
+            return Ok(result);
+        }
+
         let has_llm_key = !self.cfg.llm_api_key.trim().is_empty();
 
         // 2) Trigger word prompt override (VoiceInk behavior)

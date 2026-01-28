@@ -5319,6 +5319,7 @@ name = "voicewin-appcore"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "log",
  "serde",
  "tokio",
  "voicewin-audio",

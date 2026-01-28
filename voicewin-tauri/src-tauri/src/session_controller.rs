@@ -192,13 +192,20 @@ impl SessionController {
 
     #[cfg(any(windows, target_os = "macos"))]
     pub async fn emit_mic_level(&self, app: &tauri::AppHandle, rms: f32, peak: f32) {
-        let _ = app.emit(
-            crate::EVENT_MIC_LEVEL,
-            MicLevelPayload {
-                rms: rms.clamp(0.0, 1.0),
-                peak: peak.clamp(0.0, 1.0),
-            },
-        );
+        let payload = MicLevelPayload {
+            rms: rms.clamp(0.0, 1.0),
+            peak: peak.clamp(0.0, 1.0),
+        };
+
+        if let Some(w) = app.get_webview_window("recording_overlay") {
+            if let Err(e) = w.emit(crate::EVENT_MIC_LEVEL, payload.clone()) {
+                log::warn!("emit mic level to overlay failed: {e}");
+            }
+        }
+
+        if let Err(e) = app.emit(crate::EVENT_MIC_LEVEL, payload) {
+            log::warn!("emit mic level failed: {e}");
+        }
     }
 
     pub async fn set_stage(&self, app: &tauri::AppHandle, stage: SessionStage) {

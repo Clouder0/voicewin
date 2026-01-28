@@ -264,7 +264,9 @@ impl AppService {
                     .unwrap_or_else(|| PathBuf::from("history.json"));
 
                 let store = voicewin_runtime::history::HistoryStore::at_path(history_path);
-                let _ = store.append(entry);
+                if let Err(e) = store.append(entry) {
+                    log::error!("failed to append history: {e}");
+                }
             }
         }
 

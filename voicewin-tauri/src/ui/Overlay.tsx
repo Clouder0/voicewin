@@ -58,6 +58,16 @@ function meterBars(level: number, bars: number): boolean[] {
   return out;
 }
 
+function levelToMeter(level: number): number {
+  // Map typical mic levels (often << 0.2) into a usable 0..1 meter range.
+  // Use a simple dBFS mapping so moderate speech animates the bars.
+  const v = clamp01(level);
+  const eps = 1e-6;
+  const db = 20 * Math.log10(Math.max(eps, v));
+  // Map -60dB..0dB to 0..1.
+  return clamp01((db + 60) / 60);
+}
+
 export function Overlay() {
   const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent);
 
@@ -315,8 +325,8 @@ export function Overlay() {
 
   const meter = useMemo(() => {
     // Spec: 5 bars, height 4px..24px during recording.
-    const base = status.stage === 'recording' ? Math.max(levels.rms, levels.peak) : 0;
-    return meterBars(base, 5);
+    const raw = status.stage === 'recording' ? Math.max(levels.rms, levels.peak) : 0;
+    return meterBars(levelToMeter(raw), 5);
   }, [levels.peak, levels.rms, status.stage]);
 
   const handlePointerDown = async (e: React.PointerEvent) => {
@@ -361,6 +371,11 @@ export function Overlay() {
       return status.error;
     }
 
+    // Help users verify what we actually inserted.
+    if (status.stage === 'success' && status.last_text_preview && status.last_text_preview.trim().length > 0) {
+      return status.last_text_preview;
+    }
+
     // If the overlay is stuck in the fallback state, surface IPC diagnostics.
     if (idleFallback && status.stage === 'idle') {
       const err = bridge.lastError ? clipText(bridge.lastError, 140) : null;
@@ -372,7 +387,7 @@ export function Overlay() {
     }
 
     return null;
-  }, [bridge.isTauri, bridge.lastError, bridge.listenOk, bridge.invokeOk, bridge.overlayReadyOk, idleFallback, status.error, status.stage]);
+  }, [bridge.isTauri, bridge.lastError, bridge.listenOk, bridge.invokeOk, bridge.overlayReadyOk, idleFallback, status.error, status.last_text_preview, status.stage]);
 
   const leftKind = (() => {
     if (status.stage === 'idle') return 'spinner';
