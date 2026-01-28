@@ -69,6 +69,10 @@ struct Inner {
     status_message_expires_at: Option<Instant>,
     session_id: u64,
 
+    // Set by the overlay webview calling `overlay_ready`.
+    // We use it to make status delivery more reliable (re-emit after listeners attach).
+    overlay_ready: bool,
+
     // When we stop recording we run the session pipeline (transcribe/enhance/insert)
     // in a background task so the UI stays responsive and we can cancel it.
     processing_task: Option<tauri::async_runtime::JoinHandle<()>>,
@@ -130,36 +134,60 @@ impl SessionController {
         }
     }
 
+    pub async fn mark_overlay_ready(&self, app: &tauri::AppHandle) {
+        {
+            let mut inner = self.inner.lock().await;
+            if !inner.overlay_ready {
+                inner.overlay_ready = true;
+                log::info!("overlay_ready received");
+            }
+        }
+
+        // Immediately push the current status so the overlay can't miss the first stage.
+        self.emit_status(app).await;
+    }
+
     pub async fn emit_status(&self, app: &tauri::AppHandle) {
-        let mut inner = self.inner.lock().await;
-        Self::prune_status_message(&mut inner);
+        let payload = {
+            let mut inner = self.inner.lock().await;
+            Self::prune_status_message(&mut inner);
 
-        let elapsed_ms = if inner.stage == SessionStage::Recording {
-            inner
-                .recording_started_at
-                .map(|t| t.elapsed())
-                .map(|d| d.as_millis() as u64)
-        } else {
-            inner.recording_elapsed_ms
+            let elapsed_ms = if inner.stage == SessionStage::Recording {
+                inner
+                    .recording_started_at
+                    .map(|t| t.elapsed())
+                    .map(|d| d.as_millis() as u64)
+            } else {
+                inner.recording_elapsed_ms
+            };
+
+            let last_text_preview = inner.last_text.as_ref().map(|t| preview_text(t));
+
+            SessionStatusPayload {
+                stage: inner.stage,
+                stage_label: stage_label(inner.stage).into(),
+                is_recording: inner.stage == SessionStage::Recording,
+                elapsed_ms,
+                error: inner.status_message.clone(),
+                last_text_preview,
+                last_text_available: inner
+                    .last_text
+                    .as_ref()
+                    .map(|t| !t.is_empty())
+                    .unwrap_or(false),
+            }
         };
 
-        let last_text_preview = inner.last_text.as_ref().map(|t| preview_text(t));
+        // Best-effort: emit directly to the overlay window for reliability.
+        if let Some(w) = app.get_webview_window("recording_overlay") {
+            if let Err(e) = w.emit(crate::EVENT_SESSION_STATUS, payload.clone()) {
+                log::warn!("emit session status to overlay failed: {e}");
+            }
+        }
 
-        let payload = SessionStatusPayload {
-            stage: inner.stage,
-            stage_label: stage_label(inner.stage).into(),
-            is_recording: inner.stage == SessionStage::Recording,
-            elapsed_ms,
-            error: inner.status_message.clone(),
-            last_text_preview,
-            last_text_available: inner
-                .last_text
-                .as_ref()
-                .map(|t| !t.is_empty())
-                .unwrap_or(false),
-        };
-
-        let _ = app.emit(crate::EVENT_SESSION_STATUS, payload);
+        if let Err(e) = app.emit(crate::EVENT_SESSION_STATUS, payload) {
+            log::warn!("emit session status failed: {e}");
+        }
     }
 
     #[cfg(any(windows, target_os = "macos"))]
@@ -224,9 +252,21 @@ impl SessionController {
         }
     }
 
-    async fn hide_overlay_if_session_matches(&self, app: &tauri::AppHandle, session_id: u64) {
-        // Delay a bit so the user can see the completed stage.
-        tokio::time::sleep(Self::OVERLAY_HIDE_DELAY).await;
+    async fn show_overlay_and_sync(&self, app: &tauri::AppHandle) {
+        // On some platforms a hidden webview may miss events; showing first and
+        // then emitting status makes the overlay self-healing.
+        Self::show_overlay(app);
+        self.emit_status(app).await;
+    }
+
+    async fn hide_overlay_if_session_matches(
+        &self,
+        app: &tauri::AppHandle,
+        session_id: u64,
+        delay: Duration,
+    ) {
+        // Delay a bit so the user can see the completed stage/message.
+        tokio::time::sleep(delay).await;
 
         let should_hide = {
             let inner = self.inner.lock().await;
@@ -255,6 +295,9 @@ impl SessionController {
         self.set_stage(app, SessionStage::Error).await;
         self.set_status_message(app, error, Duration::from_secs(6))
             .await;
+
+        // Always surface errors in the HUD.
+        self.show_overlay_and_sync(app).await;
     }
 
     pub async fn cancel_recording(&self, app: &tauri::AppHandle, svc: AppService) -> ToggleResult {
@@ -291,15 +334,20 @@ impl SessionController {
                     inner.session_id
                 };
 
-                self.set_stage(app, SessionStage::Cancelled).await;
+                // Show first to avoid missing the stage update.
                 Self::show_overlay(app);
+                self.set_stage(app, SessionStage::Cancelled).await;
 
                 {
                     let controller = self.clone();
                     let app_handle = app.clone();
                     tauri::async_runtime::spawn(async move {
                         controller
-                            .hide_overlay_if_session_matches(&app_handle, session_id)
+                            .hide_overlay_if_session_matches(
+                                &app_handle,
+                                session_id,
+                                Self::OVERLAY_HIDE_DELAY,
+                            )
                             .await;
                     });
                 }
@@ -325,15 +373,20 @@ impl SessionController {
                     task.abort();
                 }
 
-                self.set_stage(app, SessionStage::Cancelled).await;
+                // Show first to avoid missing the stage update.
                 Self::show_overlay(app);
+                self.set_stage(app, SessionStage::Cancelled).await;
 
                 {
                     let controller = self.clone();
                     let app_handle = app.clone();
                     tauri::async_runtime::spawn(async move {
                         controller
-                            .hide_overlay_if_session_matches(&app_handle, session_id)
+                            .hide_overlay_if_session_matches(
+                                &app_handle,
+                                session_id,
+                                Self::OVERLAY_HIDE_DELAY,
+                            )
                             .await;
                     });
                 }
@@ -368,8 +421,9 @@ impl SessionController {
 
         match stage {
             SessionStage::Idle | SessionStage::Error | SessionStage::Cancelled | SessionStage::Success => {
-                self.set_stage(app, SessionStage::Recording).await;
+                // Show first so the overlay doesn't miss the stage update.
                 Self::show_overlay(app);
+                self.set_stage(app, SessionStage::Recording).await;
 
                 // Snapshot the current session id for the watchdog.
                 let session_id = { self.inner.lock().await.session_id };
@@ -488,11 +542,9 @@ impl SessionController {
                 }
             }
             SessionStage::Recording => {
+                // Show first so the overlay doesn't miss the stage update.
+                Self::show_overlay(app);
                 self.set_stage(app, SessionStage::Transcribing).await;
-
-                if let Some(w) = app.get_webview_window("recording_overlay") {
-                    let _ = w.show();
-                }
 
                 #[cfg(any(windows, target_os = "macos"))]
                 {
@@ -592,6 +644,20 @@ impl SessionController {
                                 controller.set_last_text(r.final_text.clone()).await;
 
                                 if r.stage == "done" {
+                                    // If we have a non-fatal warning (e.g. enhancement failed), show it briefly.
+                                    let delay = if let Some(msg) = r.error.as_ref().filter(|s| !s.trim().is_empty()) {
+                                        controller
+                                            .set_status_message(
+                                                &app_handle,
+                                                msg.clone(),
+                                                Duration::from_millis(2500),
+                                            )
+                                            .await;
+                                        Duration::from_millis(2500)
+                                    } else {
+                                        Self::OVERLAY_HIDE_DELAY
+                                    };
+
                                     controller.set_stage(&app_handle, SessionStage::Success).await;
 
                                     // After entering Recording, the session id was incremented in `set_stage`.
@@ -601,7 +667,11 @@ impl SessionController {
 
                                     tauri::async_runtime::spawn(async move {
                                         controller2
-                                            .hide_overlay_if_session_matches(&app_handle2, session_id)
+                                            .hide_overlay_if_session_matches(
+                                                &app_handle2,
+                                                session_id,
+                                                delay,
+                                            )
                                             .await;
                                     });
                                 } else if r.stage == "failed" {

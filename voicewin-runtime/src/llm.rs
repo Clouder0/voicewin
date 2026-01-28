@@ -1,8 +1,16 @@
 use voicewin_engine::traits::EnhancedText;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OpenAiCompatibleLlmProvider {
-    pub api_key: String,
+    api_key: String,
+}
+
+impl std::fmt::Debug for OpenAiCompatibleLlmProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAiCompatibleLlmProvider")
+            .field("api_key", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl OpenAiCompatibleLlmProvider {

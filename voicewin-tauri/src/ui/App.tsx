@@ -3,8 +3,9 @@ import { HistoryPage } from './HistoryPage';
 import { ModelsPage } from './ModelsPage';
 import { OverviewPage } from './OverviewPage';
 import { ProfilesPage } from './ProfilesPage';
+import { SettingsPage } from './SettingsPage';
 
-type Page = 'overview' | 'profiles' | 'models' | 'history';
+type Page = 'overview' | 'profiles' | 'models' | 'history' | 'settings';
 
 
 function PageContainer({ children }: { children: React.ReactNode }) {
@@ -18,17 +19,17 @@ export function App() {
     let unlisten: null | (() => void) = null;
 
     async function start() {
-      try {
-        const { listen } = await import('@tauri-apps/api/event');
-        unlisten = await listen<Page>('voicewin://navigate', (e) => {
-          const dest = e.payload;
-          if (dest === 'overview' || dest === 'profiles' || dest === 'models' || dest === 'history') {
-            setPage(dest);
-          }
-        });
-      } catch {
-        // Not running inside Tauri.
-      }
+        try {
+          const { listen } = await import('@tauri-apps/api/event');
+          unlisten = await listen<Page>('voicewin://navigate', (e) => {
+            const dest = e.payload;
+            if (dest === 'overview' || dest === 'profiles' || dest === 'models' || dest === 'history' || dest === 'settings') {
+              setPage(dest);
+            }
+          });
+        } catch {
+          // Not running inside Tauri.
+        }
     }
 
     void start();
@@ -62,6 +63,12 @@ export function App() {
         return (
           <PageContainer>
             <HistoryPage />
+          </PageContainer>
+        );
+      case 'settings':
+        return (
+          <PageContainer>
+            <SettingsPage />
           </PageContainer>
         );
     }
@@ -109,6 +116,16 @@ export function App() {
           title="History"
         >
           ≡
+        </button>
+        <button
+          type="button"
+          className="vw-navItem"
+          data-active={page === 'settings'}
+          onClick={() => setPage('settings')}
+          aria-label="Settings"
+          title="Settings"
+        >
+          ⚙
         </button>
       </nav>
 

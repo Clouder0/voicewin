@@ -1,0 +1,10 @@
+{
+  "identifier": "macos",
+  "description": "macOS-only helper commands for the overlay.",
+  "windows": ["recording_overlay"],
+  "platforms": ["macOS"],
+  "permissions": [
+    "allow-open-macos-accessibility-settings",
+    "allow-open-macos-microphone-settings"
+  ]
+}

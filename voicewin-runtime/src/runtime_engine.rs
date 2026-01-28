@@ -22,7 +22,7 @@ pub async fn build_engine_from_config(
     let llm_api_key = get_secret(SecretKey::OpenAiCompatibleApiKey)?.unwrap_or_default();
     let eleven_key = get_secret(SecretKey::ElevenLabsApiKey)?.unwrap_or_default();
 
-    let llm: Arc<dyn LlmProvider> = Arc::new(OpenAiCompatibleLlmProvider::new(llm_api_key));
+    let llm: Arc<dyn LlmProvider> = Arc::new(OpenAiCompatibleLlmProvider::new(llm_api_key.clone()));
 
     // STT router
     let local: Arc<dyn SttProvider> = Arc::new(LocalWhisperSttProvider::new());
@@ -37,7 +37,9 @@ pub async fn build_engine_from_config(
         defaults: cfg.defaults,
         profiles: cfg.profiles,
         prompts: cfg.prompts,
-        llm_api_key: String::new(), // legacy field; LLM provider holds key.
+        // Keep the key in the engine config so the pipeline can decide whether
+        // enhancement is possible. The actual provider still owns the secret at runtime.
+        llm_api_key,
     };
 
     Ok(VoicewinEngine::new(engine_cfg, ctx, router, llm, inserter))

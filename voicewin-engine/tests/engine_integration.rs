@@ -104,6 +104,22 @@ impl LlmProvider for OpenAiCompatibleLlm {
     }
 }
 
+struct PanicLlm;
+
+#[async_trait::async_trait]
+impl LlmProvider for PanicLlm {
+    async fn enhance(
+        &self,
+        _base_url: &str,
+        _api_key: &str,
+        _model: &str,
+        _system_message: &str,
+        _user_message: &str,
+    ) -> anyhow::Result<EnhancedText> {
+        panic!("LLM should not be called when no API key is set")
+    }
+}
+
 #[tokio::test]
 async fn end_to_end_session_uses_power_mode_and_llm() {
     let server = MockServer::start().await;
@@ -181,4 +197,59 @@ async fn end_to_end_session_uses_power_mode_and_llm() {
     assert_eq!(inserted.len(), 1);
     assert_eq!(inserted[0].0, "Hello, world.");
     assert_eq!(inserted[0].1, InsertMode::PasteAndEnter);
+}
+
+#[tokio::test]
+async fn trigger_words_do_not_strip_without_llm_key() {
+    let defaults = GlobalDefaults {
+        // User enabled enhancement, but has not configured an API key.
+        enable_enhancement: true,
+        prompt_id: None,
+        insert_mode: InsertMode::Paste,
+        stt_provider: "local".into(),
+        stt_model: "mock".into(),
+        language: "en".into(),
+        llm_base_url: "https://api.example.com/v1".into(),
+        llm_model: "gpt-4o-mini".into(),
+        microphone_device: None,
+        history_enabled: true,
+        context: voicewin_core::context::ContextToggles::default(),
+    };
+
+    let prompts = vec![PromptTemplate {
+        id: PromptId::new(),
+        title: "Rewrite".into(),
+        mode: PromptMode::Enhancer,
+        prompt_text: "Clean up.".into(),
+        trigger_words: vec!["rewrite".into()],
+    }];
+
+    let inserted = Arc::new(std::sync::Mutex::new(vec![]));
+
+    let engine = VoicewinEngine::new(
+        EngineConfig {
+            defaults,
+            profiles: vec![],
+            prompts,
+            llm_api_key: "".into(),
+        },
+        Arc::new(TestContext),
+        Arc::new(TestStt),
+        Arc::new(PanicLlm),
+        Arc::new(TestInserter {
+            inserted: inserted.clone(),
+        }),
+    );
+
+    let audio = AudioInput {
+        sample_rate_hz: 16_000,
+        samples: vec![0.0; 8],
+    };
+
+    let res = engine.run_session(audio).await.unwrap();
+    let text = res.final_text.as_deref().unwrap_or_default();
+    assert!(
+        text.contains("rewrite"),
+        "trigger word should not be stripped when enhancement is unavailable"
+    );
 }

@@ -27,6 +27,14 @@ type MicLevelPayload = {
   peak: number;
 };
 
+type BridgeState = {
+  isTauri: boolean;
+  listenOk: boolean;
+  invokeOk: boolean;
+  overlayReadyOk: boolean;
+  lastError: string | null;
+};
+
 // Mic levels are emitted on Windows and macOS (best-effort).
 
 function clamp01(v: number): number {
@@ -34,6 +42,11 @@ function clamp01(v: number): number {
   if (v < 0) return 0;
   if (v > 1) return 1;
   return v;
+}
+
+function clipText(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max) + '…';
 }
 
 function meterBars(level: number, bars: number): boolean[] {
@@ -68,34 +81,62 @@ export function Overlay() {
 
   const [levels, setLevels] = useState<MicLevelPayload>({ rms: 0, peak: 0 });
 
+  const [bridge, setBridge] = useState<BridgeState>({
+    isTauri: true,
+    listenOk: false,
+    invokeOk: false,
+    overlayReadyOk: false,
+    lastError: null,
+  });
+
   useEffect(() => {
     let unlistenStatus: null | (() => void) = null;
     let unlistenLevel: null | (() => void) = null;
 
     async function start() {
       try {
-        const { listen } = await import('@tauri-apps/api/event');
-        const { invoke } = await import('@tauri-apps/api/core');
-
-        unlistenStatus = await listen<SessionStatusPayload>('voicewin://session_status', (e) => {
-          setStatus(e.payload);
-        });
-
-        // Optional: only emitted when backend supports mic levels.
-        unlistenLevel = await listen<MicLevelPayload>('voicewin://mic_level', (e) => {
-          setLevels(e.payload);
-        });
-
-        // Best-effort: fetch current status in case we missed the first emit
-        // (e.g. overlay window is shown before listeners attach).
-        try {
-          const current = await invoke<SessionStatusPayload>('get_session_status');
-          setStatus(current);
-        } catch {
-          // Ignore.
+        const core = await import('@tauri-apps/api/core');
+        if (!core.isTauri()) {
+          setBridge((b) => ({ ...b, isTauri: false, lastError: 'not running inside Tauri' }));
+          return;
         }
-      } catch {
-        // Not running inside Tauri.
+        setBridge((b) => ({ ...b, isTauri: true }));
+
+        try {
+          const { listen } = await import('@tauri-apps/api/event');
+          unlistenStatus = await listen<SessionStatusPayload>('voicewin://session_status', (e) => {
+            setStatus(e.payload);
+          });
+
+          // Optional: only emitted when backend supports mic levels.
+          unlistenLevel = await listen<MicLevelPayload>('voicewin://mic_level', (e) => {
+            setLevels(e.payload);
+          });
+
+          setBridge((b) => ({ ...b, listenOk: true }));
+        } catch (e) {
+          setBridge((b) => ({ ...b, listenOk: false, lastError: String(e) }));
+        }
+
+        // Tell the backend we're ready so it can re-emit the current status.
+        // Do this *after* listeners are attached.
+        try {
+          await core.invoke('overlay_ready');
+          setBridge((b) => ({ ...b, overlayReadyOk: true }));
+        } catch (e) {
+          setBridge((b) => ({ ...b, overlayReadyOk: false, lastError: String(e) }));
+        }
+
+        // Best-effort: fetch current status in case we missed the first emit.
+        try {
+          const current = await core.invoke<SessionStatusPayload>('get_session_status');
+          setStatus(current);
+          setBridge((b) => ({ ...b, invokeOk: true }));
+        } catch (e) {
+          setBridge((b) => ({ ...b, invokeOk: false, lastError: String(e) }));
+        }
+      } catch (e) {
+        setBridge((b) => ({ ...b, isTauri: false, lastError: String(e) }));
       }
     }
 
@@ -138,6 +179,40 @@ export function Overlay() {
       stop = true;
     };
   }, []);
+
+  // If the overlay missed the initial status event (common when the window is created hidden),
+  // keep polling while we're in fallback so we can recover to "Listening" quickly.
+  useEffect(() => {
+    if (!idleFallback) return;
+
+    let cancelled = false;
+    let inFlight = false;
+
+    async function tick() {
+      if (cancelled) return;
+      if (inFlight) return;
+
+      inFlight = true;
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const current = await invoke<SessionStatusPayload>('get_session_status');
+        setStatus(current);
+      } catch {
+        // Ignore: if IPC isn't ready yet, we will try again.
+      } finally {
+        inFlight = false;
+      }
+    }
+
+    // Poll at a modest cadence; stop once we receive a non-idle stage (idleFallback will clear).
+    void tick();
+    const id = window.setInterval(() => void tick(), 250);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [idleFallback]);
 
   useEffect(() => {
     if (status.stage !== 'idle' && idleFallback) {
@@ -270,7 +345,7 @@ export function Overlay() {
   };
 
   const pillText = (() => {
-    if (status.stage === 'idle') return 'Starting…';
+    if (status.stage === 'idle') return 'Connecting…';
     if (status.stage === 'recording') return 'Listening...';
     if (status.stage === 'enhancing') return 'Enhancing...';
     if (status.stage === 'transcribing' || status.stage === 'inserting') return 'Thinking...';
@@ -279,6 +354,25 @@ export function Overlay() {
     if (status.stage === 'error') return status.error ? status.error : 'Error';
     return '';
   })();
+
+  const subtitle = useMemo(() => {
+    // `status.error` is a transient status message (not always a hard error).
+    if (status.stage !== 'error' && status.error) {
+      return status.error;
+    }
+
+    // If the overlay is stuck in the fallback state, surface IPC diagnostics.
+    if (idleFallback && status.stage === 'idle') {
+      const err = bridge.lastError ? clipText(bridge.lastError, 140) : null;
+      if (!bridge.isTauri) return err ?? 'IPC unavailable';
+      if (!bridge.listenOk && !bridge.invokeOk) return err ?? 'IPC blocked (check capabilities)';
+      if (!bridge.listenOk) return err ?? 'Events unavailable';
+      if (!bridge.invokeOk) return err ?? 'Status unavailable';
+      if (!bridge.overlayReadyOk) return err ?? 'Sync unavailable';
+    }
+
+    return null;
+  }, [bridge.isTauri, bridge.lastError, bridge.listenOk, bridge.invokeOk, bridge.overlayReadyOk, idleFallback, status.error, status.stage]);
 
   const leftKind = (() => {
     if (status.stage === 'idle') return 'spinner';
@@ -333,6 +427,12 @@ export function Overlay() {
               >
                 {pillText}
               </div>
+
+              {subtitle ? (
+                <div className="vw-type-caption" style={{ marginTop: 2, color: 'var(--text-secondary)' }}>
+                  {subtitle}
+                </div>
+              ) : null}
             </div>
 
           <div className="vw-hudRight">

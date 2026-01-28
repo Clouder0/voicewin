@@ -386,7 +386,10 @@ async fn get_config(state: State<'_, AppState>, app: tauri::AppHandle) -> Result
         .await
         .map_err(|e| e.to_string())?;
 
-    load_or_init_config(svc, &app)
+    let mut cfg = load_or_init_config(svc, &app)?;
+    // Reflect current keyring state (not just what's stored on disk).
+    cfg.llm_api_key_present = svc.get_openai_api_key_present().unwrap_or(false);
+    Ok(cfg)
 }
 
 #[tauri::command]
@@ -408,6 +411,9 @@ async fn set_config(
     {
         cfg.defaults.stt_model = normalized;
     }
+
+    // Never trust the frontend for secret state; refresh the key-present bit from the keyring.
+    cfg.llm_api_key_present = svc.get_openai_api_key_present().unwrap_or(false);
 
     validate_config(&cfg)?;
 
@@ -642,6 +648,69 @@ struct ModelStatus {
     pub bootstrap_path: String,
     pub preferred_ok: bool,
     pub preferred_path: String,
+}
+
+#[derive(serde::Serialize)]
+struct ProviderStatus {
+    pub openai_api_key_present: bool,
+    pub elevenlabs_api_key_present: bool,
+}
+
+#[tauri::command]
+async fn get_provider_status(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<ProviderStatus, String> {
+    let svc = state
+        .service
+        .get_or_try_init(|| async { build_service(&app).await })
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(ProviderStatus {
+        openai_api_key_present: svc.get_openai_api_key_present().unwrap_or(false),
+        elevenlabs_api_key_present: svc.get_elevenlabs_api_key_present().unwrap_or(false),
+    })
+}
+
+#[tauri::command]
+async fn set_openai_api_key(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    api_key: String,
+) -> Result<ProviderStatus, String> {
+    let svc = state
+        .service
+        .get_or_try_init(|| async { build_service(&app).await })
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let trimmed = api_key.trim();
+    if trimmed.is_empty() {
+        svc.clear_openai_api_key().map_err(|e| e.to_string())?;
+    } else {
+        svc.set_openai_api_key(trimmed).map_err(|e| e.to_string())?;
+    }
+
+    Ok(ProviderStatus {
+        openai_api_key_present: svc.get_openai_api_key_present().unwrap_or(false),
+        elevenlabs_api_key_present: svc.get_elevenlabs_api_key_present().unwrap_or(false),
+    })
+}
+
+#[tauri::command]
+async fn clear_openai_api_key(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<ProviderStatus, String> {
+    let svc = state
+        .service
+        .get_or_try_init(|| async { build_service(&app).await })
+        .await
+        .map_err(|e| e.to_string())?;
+
+    svc.clear_openai_api_key().map_err(|e| e.to_string())?;
+    Ok(ProviderStatus {
+        openai_api_key_present: svc.get_openai_api_key_present().unwrap_or(false),
+        elevenlabs_api_key_present: svc.get_elevenlabs_api_key_present().unwrap_or(false),
+    })
 }
 
 #[cfg(any(windows, target_os = "macos"))]
@@ -989,6 +1058,14 @@ async fn overlay_set_size(app: tauri::AppHandle, width: f64, height: f64) -> Res
 }
 
 #[tauri::command]
+async fn overlay_ready(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<(), String> {
+    // The overlay webview calls this after it has mounted and registered event listeners.
+    // This lets us re-emit the current session status and avoid "missed first emit" races.
+    state.session.mark_overlay_ready(&app).await;
+    Ok(())
+}
+
+#[tauri::command]
 async fn overlay_dismiss(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(w) = app.get_webview_window("recording_overlay") {
         let _ = w.hide();
@@ -1101,6 +1178,9 @@ fn main() {
             get_history,
             clear_history,
             delete_history_entry,
+            get_provider_status,
+            set_openai_api_key,
+            clear_openai_api_key,
             get_model_status,
             #[cfg(any(windows, target_os = "macos"))]
             list_microphones,
@@ -1111,6 +1191,7 @@ fn main() {
             overlay_drag_begin,
             overlay_drag_end,
             overlay_set_size,
+            overlay_ready,
             overlay_dismiss,
             show_main_window,
 

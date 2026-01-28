@@ -1,6 +1,7 @@
 use crate::request::{Body, HttpRequest};
 use anyhow::{Context, anyhow};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct HttpResponse {
@@ -9,7 +10,13 @@ pub struct HttpResponse {
 }
 
 pub async fn execute(req: &HttpRequest) -> anyhow::Result<HttpResponse> {
-    let client = reqwest::Client::new();
+    // Important: without an explicit timeout, a broken endpoint can hang the
+    // session indefinitely (especially during enhancement).
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .build()
+        .context("build http client")?;
 
     let mut headers = HeaderMap::new();
     for (k, v) in &req.headers {

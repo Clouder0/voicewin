@@ -177,6 +177,168 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the cancel_recording command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cancel-recording",
+          "markdownDescription": "Enables the cancel_recording command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the capture_foreground_app command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-capture-foreground-app",
+          "markdownDescription": "Enables the capture_foreground_app command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the clear_history command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-clear-history",
+          "markdownDescription": "Enables the clear_history command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the clear_openai_api_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-clear-openai-api-key",
+          "markdownDescription": "Enables the clear_openai_api_key command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_history_entry command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-history-entry",
+          "markdownDescription": "Enables the delete_history_entry command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the download_model command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-download-model",
+          "markdownDescription": "Enables the download_model command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_config command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-config",
+          "markdownDescription": "Enables the get_config command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_history command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-history",
+          "markdownDescription": "Enables the get_history command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_model_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-model-status",
+          "markdownDescription": "Enables the get_model_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_provider_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-provider-status",
+          "markdownDescription": "Enables the get_provider_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_session_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-session-status",
+          "markdownDescription": "Enables the get_session_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_toggle_hotkey command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-toggle-hotkey",
+          "markdownDescription": "Enables the get_toggle_hotkey command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_microphones command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-microphones",
+          "markdownDescription": "Enables the list_microphones command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_models command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-models",
+          "markdownDescription": "Enables the list_models command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_macos_accessibility_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-macos-accessibility-settings",
+          "markdownDescription": "Enables the open_macos_accessibility_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_macos_microphone_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-macos-microphone-settings",
+          "markdownDescription": "Enables the open_macos_microphone_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the overlay_dismiss command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-overlay-dismiss",
+          "markdownDescription": "Enables the overlay_dismiss command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the overlay_drag_begin command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-overlay-drag-begin",
+          "markdownDescription": "Enables the overlay_drag_begin command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the overlay_drag_end command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-overlay-drag-end",
+          "markdownDescription": "Enables the overlay_drag_end command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the overlay_ready command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-overlay-ready",
+          "markdownDescription": "Enables the overlay_ready command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the overlay_set_size command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-overlay-set-size",
+          "markdownDescription": "Enables the overlay_set_size command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_active_model command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-active-model",
+          "markdownDescription": "Enables the set_active_model command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_config command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-config",
+          "markdownDescription": "Enables the set_config command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_openai_api_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-openai-api-key",
+          "markdownDescription": "Enables the set_openai_api_key command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_toggle_hotkey command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-toggle-hotkey",
+          "markdownDescription": "Enables the set_toggle_hotkey command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the show_main_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-show-main-window",
+          "markdownDescription": "Enables the show_main_window command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the toggle_recording command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-toggle-recording",
+          "markdownDescription": "Enables the toggle_recording command without any pre-configured scope."
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",

@@ -40,9 +40,17 @@ pub fn encode_wav_mono_f32le(samples: &[f32], sample_rate_hz: u32) -> Vec<u8> {
     out
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ElevenLabsSttProvider {
-    pub api_key: String,
+    api_key: String,
+}
+
+impl std::fmt::Debug for ElevenLabsSttProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ElevenLabsSttProvider")
+            .field("api_key", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl ElevenLabsSttProvider {

@@ -15,7 +15,9 @@ pub fn default_prompt_templates() -> Vec<PromptTemplate> {
 
 pub fn default_global_defaults() -> GlobalDefaults {
     GlobalDefaults {
-        enable_enhancement: true,
+        // Default off: local dictation should work out-of-box without requiring
+        // any cloud API keys.
+        enable_enhancement: false,
         prompt_id: None,
         insert_mode: InsertMode::Paste,
         stt_provider: "local".into(),

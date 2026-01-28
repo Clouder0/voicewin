@@ -1,0 +1,39 @@
+{
+  "identifier": "default",
+  "description": "Default capability for main + overlay webviews.",
+  "windows": ["main", "recording_overlay"],
+  "permissions": [
+    "core:default",
+
+    "allow-get-config",
+    "allow-set-config",
+
+    "allow-toggle-recording",
+    "allow-cancel-recording",
+    "allow-get-session-status",
+
+    "allow-get-history",
+    "allow-clear-history",
+    "allow-delete-history-entry",
+
+    "allow-get-provider-status",
+    "allow-set-openai-api-key",
+    "allow-clear-openai-api-key",
+
+    "allow-get-model-status",
+
+    "allow-list-models",
+    "allow-download-model",
+    "allow-set-active-model",
+
+    "allow-capture-foreground-app",
+
+    "allow-overlay-drag-begin",
+    "allow-overlay-drag-end",
+    "allow-overlay-set-size",
+    "allow-overlay-dismiss",
+    "allow-show-main-window",
+
+    "allow-overlay-ready"
+  ]
+}

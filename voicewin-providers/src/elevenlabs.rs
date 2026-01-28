@@ -1,10 +1,20 @@
 use crate::request::{Body, HttpRequest};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ElevenLabsSttConfig {
     pub api_key: String,
     pub model_id: String,
     pub language_code: Option<String>,
+}
+
+impl std::fmt::Debug for ElevenLabsSttConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ElevenLabsSttConfig")
+            .field("api_key", &"[REDACTED]")
+            .field("model_id", &self.model_id)
+            .field("language_code", &self.language_code)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

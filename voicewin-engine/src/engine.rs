@@ -26,7 +26,7 @@ pub enum EngineError {
     NoDefaultPrompt,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct EngineConfig {
     pub defaults: GlobalDefaults,
     pub profiles: Vec<PowerModeProfile>,
@@ -34,6 +34,17 @@ pub struct EngineConfig {
 
     // LLM auth is currently global in MVP.
     pub llm_api_key: String,
+}
+
+impl std::fmt::Debug for EngineConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EngineConfig")
+            .field("defaults", &self.defaults)
+            .field("profiles", &self.profiles)
+            .field("prompts", &self.prompts)
+            .field("llm_api_key", &"[REDACTED]")
+            .finish()
+    }
 }
 
 pub struct VoicewinEngine {
@@ -117,17 +128,24 @@ impl VoicewinEngine {
 
         let mut final_text = filter_transcription_output(&transcript.text);
 
+        let has_llm_key = !self.cfg.llm_api_key.trim().is_empty();
+
         // 2) Trigger word prompt override (VoiceInk behavior)
         let mut prompt_id = eff.prompt_id.clone();
         let detection = detect_trigger_word(&final_text, &self.cfg.prompts);
-        if detection.should_enable_enhancement {
+        // Only treat trigger words as commands when enhancement is actually available.
+        if has_llm_key && detection.should_enable_enhancement {
             final_text = detection.processed_transcript;
             prompt_id = detection.selected_prompt_id;
         }
 
         let mut enhanced = None;
         let mut enhancement_ms = None;
-        if eff.enable_enhancement || detection.should_enable_enhancement {
+
+        // Enhancement is optional. If the user hasn't configured an API key, we
+        // must not fail the entire session.
+        let wants_enhancement = eff.enable_enhancement || detection.should_enable_enhancement;
+        if wants_enhancement && has_llm_key {
             // 3) Enhance
             result.stage = SessionStage::Enhancing;
             result.stage_label = Some(STAGE_ENHANCING.into());
@@ -166,7 +184,7 @@ impl VoicewinEngine {
             let built = build_enhancement_prompt(&final_text, prompt, &ctx);
 
             let e0 = Instant::now();
-            let llm_out = self
+            match self
                 .llm
                 .enhance(
                     &eff.llm_base_url,
@@ -175,12 +193,29 @@ impl VoicewinEngine {
                     &built.system_message,
                     &built.user_message,
                 )
-                .await?;
-            enhancement_ms = Some(ms(e0.elapsed()));
-
-            let cleaned = post_process_llm_output(&llm_out.text);
-            final_text = cleaned;
-            enhanced = Some(llm_out);
+                .await
+            {
+                Ok(llm_out) => {
+                    enhancement_ms = Some(ms(e0.elapsed()));
+                    let cleaned = post_process_llm_output(&llm_out.text);
+                    final_text = cleaned;
+                    enhanced = Some(llm_out);
+                }
+                Err(e) => {
+                    // Best-effort: keep the raw transcript if enhancement fails.
+                    // The session should still insert text and succeed.
+                    //
+                    // Surface a short warning (without failing the session).
+                    let mut msg = e.to_string();
+                    if msg.len() > 140 {
+                        msg.truncate(140);
+                        msg.push_str("...");
+                    }
+                    result.error = Some(format!(
+                        "Enhancement failed; inserted raw transcript. ({msg})"
+                    ));
+                }
+            }
         }
 
         // Make the output text recoverable even if insertion fails.

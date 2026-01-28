@@ -1,0 +1,11 @@
+{
+  "identifier": "windows-macos",
+  "description": "Extra permissions for desktop-only features (hotkey + mic picker).",
+  "windows": ["main"],
+  "platforms": ["windows", "macOS"],
+  "permissions": [
+    "allow-get-toggle-hotkey",
+    "allow-set-toggle-hotkey",
+    "allow-list-microphones"
+  ]
+}

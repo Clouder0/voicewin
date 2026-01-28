@@ -151,6 +151,10 @@ impl AppService {
         Ok(get_secret(SecretKey::OpenAiCompatibleApiKey)?.is_some())
     }
 
+    pub fn clear_openai_api_key(&self) -> anyhow::Result<()> {
+        delete_secret(SecretKey::OpenAiCompatibleApiKey)
+    }
+
     pub fn set_elevenlabs_api_key(&self, value: &str) -> anyhow::Result<()> {
         set_secret(SecretKey::ElevenLabsApiKey, value)
     }

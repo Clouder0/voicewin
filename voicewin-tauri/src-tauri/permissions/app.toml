@@ -1,0 +1,140 @@
+# VoiceWin app command permissions.
+#
+# This file enables calling `#[tauri::command]` functions from the frontend.
+# Tauri v2 requires capabilities + permissions; the overlay window is created
+# programmatically, so it must be included explicitly.
+
+[[permission]]
+identifier = "allow-get-config"
+description = "Enables the get_config command without any pre-configured scope."
+commands.allow = ["get_config"]
+
+[[permission]]
+identifier = "allow-set-config"
+description = "Enables the set_config command without any pre-configured scope."
+commands.allow = ["set_config"]
+
+[[permission]]
+identifier = "allow-toggle-recording"
+description = "Enables the toggle_recording command without any pre-configured scope."
+commands.allow = ["toggle_recording"]
+
+[[permission]]
+identifier = "allow-cancel-recording"
+description = "Enables the cancel_recording command without any pre-configured scope."
+commands.allow = ["cancel_recording"]
+
+[[permission]]
+identifier = "allow-get-session-status"
+description = "Enables the get_session_status command without any pre-configured scope."
+commands.allow = ["get_session_status"]
+
+[[permission]]
+identifier = "allow-get-toggle-hotkey"
+description = "Enables the get_toggle_hotkey command without any pre-configured scope."
+commands.allow = ["get_toggle_hotkey"]
+
+[[permission]]
+identifier = "allow-set-toggle-hotkey"
+description = "Enables the set_toggle_hotkey command without any pre-configured scope."
+commands.allow = ["set_toggle_hotkey"]
+
+[[permission]]
+identifier = "allow-get-history"
+description = "Enables the get_history command without any pre-configured scope."
+commands.allow = ["get_history"]
+
+[[permission]]
+identifier = "allow-clear-history"
+description = "Enables the clear_history command without any pre-configured scope."
+commands.allow = ["clear_history"]
+
+[[permission]]
+identifier = "allow-delete-history-entry"
+description = "Enables the delete_history_entry command without any pre-configured scope."
+commands.allow = ["delete_history_entry"]
+
+[[permission]]
+identifier = "allow-get-provider-status"
+description = "Enables the get_provider_status command without any pre-configured scope."
+commands.allow = ["get_provider_status"]
+
+[[permission]]
+identifier = "allow-set-openai-api-key"
+description = "Enables the set_openai_api_key command without any pre-configured scope."
+commands.allow = ["set_openai_api_key"]
+
+[[permission]]
+identifier = "allow-clear-openai-api-key"
+description = "Enables the clear_openai_api_key command without any pre-configured scope."
+commands.allow = ["clear_openai_api_key"]
+
+[[permission]]
+identifier = "allow-get-model-status"
+description = "Enables the get_model_status command without any pre-configured scope."
+commands.allow = ["get_model_status"]
+
+[[permission]]
+identifier = "allow-list-microphones"
+description = "Enables the list_microphones command without any pre-configured scope."
+commands.allow = ["list_microphones"]
+
+[[permission]]
+identifier = "allow-list-models"
+description = "Enables the list_models command without any pre-configured scope."
+commands.allow = ["list_models"]
+
+[[permission]]
+identifier = "allow-download-model"
+description = "Enables the download_model command without any pre-configured scope."
+commands.allow = ["download_model"]
+
+[[permission]]
+identifier = "allow-set-active-model"
+description = "Enables the set_active_model command without any pre-configured scope."
+commands.allow = ["set_active_model"]
+
+[[permission]]
+identifier = "allow-capture-foreground-app"
+description = "Enables the capture_foreground_app command without any pre-configured scope."
+commands.allow = ["capture_foreground_app"]
+
+[[permission]]
+identifier = "allow-overlay-drag-begin"
+description = "Enables the overlay_drag_begin command without any pre-configured scope."
+commands.allow = ["overlay_drag_begin"]
+
+[[permission]]
+identifier = "allow-overlay-drag-end"
+description = "Enables the overlay_drag_end command without any pre-configured scope."
+commands.allow = ["overlay_drag_end"]
+
+[[permission]]
+identifier = "allow-overlay-set-size"
+description = "Enables the overlay_set_size command without any pre-configured scope."
+commands.allow = ["overlay_set_size"]
+
+[[permission]]
+identifier = "allow-overlay-ready"
+description = "Enables the overlay_ready command without any pre-configured scope."
+commands.allow = ["overlay_ready"]
+
+[[permission]]
+identifier = "allow-overlay-dismiss"
+description = "Enables the overlay_dismiss command without any pre-configured scope."
+commands.allow = ["overlay_dismiss"]
+
+[[permission]]
+identifier = "allow-show-main-window"
+description = "Enables the show_main_window command without any pre-configured scope."
+commands.allow = ["show_main_window"]
+
+[[permission]]
+identifier = "allow-open-macos-accessibility-settings"
+description = "Enables the open_macos_accessibility_settings command without any pre-configured scope."
+commands.allow = ["open_macos_accessibility_settings"]
+
+[[permission]]
+identifier = "allow-open-macos-microphone-settings"
+description = "Enables the open_macos_microphone_settings command without any pre-configured scope."
+commands.allow = ["open_macos_microphone_settings"]
