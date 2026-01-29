@@ -655,7 +655,28 @@ struct ModelStatus {
 #[derive(serde::Serialize)]
 struct ProviderStatus {
     pub openai_api_key_present: bool,
+    pub openai_api_key_error: Option<String>,
     pub elevenlabs_api_key_present: bool,
+    pub elevenlabs_api_key_error: Option<String>,
+}
+
+fn provider_status(svc: &AppService) -> ProviderStatus {
+    let (openai_api_key_present, openai_api_key_error) = match svc.get_openai_api_key_present() {
+        Ok(v) => (v, None),
+        Err(e) => (false, Some(e.to_string())),
+    };
+
+    let (elevenlabs_api_key_present, elevenlabs_api_key_error) = match svc.get_elevenlabs_api_key_present() {
+        Ok(v) => (v, None),
+        Err(e) => (false, Some(e.to_string())),
+    };
+
+    ProviderStatus {
+        openai_api_key_present,
+        openai_api_key_error,
+        elevenlabs_api_key_present,
+        elevenlabs_api_key_error,
+    }
 }
 
 #[tauri::command]
@@ -667,8 +688,7 @@ async fn get_provider_status(state: State<'_, AppState>, app: tauri::AppHandle) 
         .map_err(|e| e.to_string())?;
 
     Ok(ProviderStatus {
-        openai_api_key_present: svc.get_openai_api_key_present().unwrap_or(false),
-        elevenlabs_api_key_present: svc.get_elevenlabs_api_key_present().unwrap_or(false),
+        ..provider_status(&svc)
     })
 }
 
@@ -691,10 +711,7 @@ async fn set_openai_api_key(
         svc.set_openai_api_key(trimmed).map_err(|e| e.to_string())?;
     }
 
-    Ok(ProviderStatus {
-        openai_api_key_present: svc.get_openai_api_key_present().unwrap_or(false),
-        elevenlabs_api_key_present: svc.get_elevenlabs_api_key_present().unwrap_or(false),
-    })
+    Ok(provider_status(&svc))
 }
 
 #[tauri::command]
@@ -709,10 +726,7 @@ async fn clear_openai_api_key(
         .map_err(|e| e.to_string())?;
 
     svc.clear_openai_api_key().map_err(|e| e.to_string())?;
-    Ok(ProviderStatus {
-        openai_api_key_present: svc.get_openai_api_key_present().unwrap_or(false),
-        elevenlabs_api_key_present: svc.get_elevenlabs_api_key_present().unwrap_or(false),
-    })
+    Ok(provider_status(&svc))
 }
 
 #[tauri::command]
@@ -735,10 +749,7 @@ async fn set_elevenlabs_api_key(
             .map_err(|e| e.to_string())?;
     }
 
-    Ok(ProviderStatus {
-        openai_api_key_present: svc.get_openai_api_key_present().unwrap_or(false),
-        elevenlabs_api_key_present: svc.get_elevenlabs_api_key_present().unwrap_or(false),
-    })
+    Ok(provider_status(&svc))
 }
 
 #[tauri::command]
@@ -753,10 +764,7 @@ async fn clear_elevenlabs_api_key(
         .map_err(|e| e.to_string())?;
 
     svc.clear_elevenlabs_api_key().map_err(|e| e.to_string())?;
-    Ok(ProviderStatus {
-        openai_api_key_present: svc.get_openai_api_key_present().unwrap_or(false),
-        elevenlabs_api_key_present: svc.get_elevenlabs_api_key_present().unwrap_or(false),
-    })
+    Ok(provider_status(&svc))
 }
 
 #[cfg(any(windows, target_os = "macos"))]

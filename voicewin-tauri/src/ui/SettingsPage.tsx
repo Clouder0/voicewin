@@ -64,6 +64,12 @@ export function SettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Inline key feedback so failures aren't "offscreen" at the page header.
+  const [elevenKeyNotice, setElevenKeyNotice] = useState<string | null>(null);
+  const [elevenKeyError, setElevenKeyError] = useState<string | null>(null);
+  const [openaiKeyNotice, setOpenaiKeyNotice] = useState<string | null>(null);
+  const [openaiKeyError, setOpenaiKeyError] = useState<string | null>(null);
+
   const [dirty, setDirty] = useState(false);
   const [draft, setDraft] = useState({
     enable_enhancement: false,
@@ -97,7 +103,7 @@ export function SettingsPage() {
   }, []);
 
   const saveConfig = useCallback(
-    async (nextCfg: AppConfig) => {
+    async (nextCfg: AppConfig): Promise<boolean> => {
       setSaving(true);
       try {
         const { invoke } = await import('@tauri-apps/api/core');
@@ -106,8 +112,10 @@ export function SettingsPage() {
         setError(null);
         // Refresh so we pick up key-present and any backend normalization.
         await refresh();
+        return true;
       } catch (e) {
         setError(String(e));
+        return false;
       } finally {
         setSaving(false);
       }
@@ -145,12 +153,22 @@ export function SettingsPage() {
 
   const openaiKeyStatus = useMemo(() => {
     if (!providers) return 'Unknown';
+    if (providers.openai_api_key_error) return 'Unavailable';
     return providers.openai_api_key_present ? 'Set' : 'Not set';
+  }, [providers]);
+
+  const openaiKeyStatusError = useMemo(() => {
+    return providers?.openai_api_key_error ?? null;
   }, [providers]);
 
   const elevenKeyStatus = useMemo(() => {
     if (!providers) return 'Unknown';
+    if (providers.elevenlabs_api_key_error) return 'Unavailable';
     return providers.elevenlabs_api_key_present ? 'Set' : 'Not set';
+  }, [providers]);
+
+  const elevenKeyStatusError = useMemo(() => {
+    return providers?.elevenlabs_api_key_error ?? null;
   }, [providers]);
 
   const baseUrlLooksMissingV1 = useMemo(() => {
@@ -163,7 +181,15 @@ export function SettingsPage() {
 
   if (!cfg) {
     return (
-      <div style={{ maxWidth: 720, margin: '0 auto', paddingTop: 64, paddingInline: 'var(--space-24)' }}>
+      <div
+        style={{
+          maxWidth: 720,
+          margin: '0 auto',
+          paddingTop: 64,
+          paddingInline: 'var(--space-24)',
+          paddingBottom: 'var(--space-32)',
+        }}
+      >
         <div className="vw-type-title">Settings</div>
         <div className="vw-type-caption" style={{ marginTop: 'var(--space-12)' }}>
           Loading…
@@ -178,7 +204,15 @@ export function SettingsPage() {
   }
 
   return (
-    <div style={{ maxWidth: 720, margin: '0 auto', paddingTop: 64, paddingInline: 'var(--space-24)' }}>
+    <div
+      style={{
+        maxWidth: 720,
+        margin: '0 auto',
+        paddingTop: 64,
+        paddingInline: 'var(--space-24)',
+        paddingBottom: 'var(--space-32)',
+      }}
+    >
       <div className="vw-type-title">Settings</div>
 
       {error ? (
@@ -265,13 +299,20 @@ export function SettingsPage() {
                 onClick={async () => {
                   try {
                     setSaving(true);
+                    setElevenKeyError(null);
+                    setElevenKeyNotice(null);
                     const { invoke } = await import('@tauri-apps/api/core');
-                    const next = await invoke<ProviderStatus>('set_elevenlabs_api_key', { apiKey: elevenApiKeyDraft });
+                    const next = await invoke<ProviderStatus>('set_elevenlabs_api_key', { api_key: elevenApiKeyDraft });
                     setProviders(next);
                     setElevenApiKeyDraft('');
+
+                    setElevenKeyNotice('Saved');
+                    window.setTimeout(() => setElevenKeyNotice(null), 2000);
                     await refresh();
                   } catch (e) {
-                    setError(String(e));
+                    const msg = String(e);
+                    setError(msg);
+                    setElevenKeyError(msg);
                   } finally {
                     setSaving(false);
                   }
@@ -286,13 +327,20 @@ export function SettingsPage() {
                 onClick={async () => {
                   try {
                     setSaving(true);
+                    setElevenKeyError(null);
+                    setElevenKeyNotice(null);
                     const { invoke } = await import('@tauri-apps/api/core');
                     const next = await invoke<ProviderStatus>('clear_elevenlabs_api_key');
                     setProviders(next);
                     setElevenApiKeyDraft('');
+
+                    setElevenKeyNotice('Cleared');
+                    window.setTimeout(() => setElevenKeyNotice(null), 2000);
                     await refresh();
                   } catch (e) {
-                    setError(String(e));
+                    const msg = String(e);
+                    setError(msg);
+                    setElevenKeyError(msg);
                   } finally {
                     setSaving(false);
                   }
@@ -304,7 +352,29 @@ export function SettingsPage() {
           }
         />
 
-        {draft.stt_provider === 'elevenlabs' && !providers?.elevenlabs_api_key_present ? (
+        {elevenKeyStatusError ? (
+          <div className="vw-type-caption" style={{ padding: 'var(--space-12)', color: 'var(--color-danger-fg)' }}>
+            Keyring error: {elevenKeyStatusError}
+          </div>
+        ) : null}
+        {elevenKeyError ? (
+          <div className="vw-type-caption" style={{ padding: 'var(--space-12)', color: 'var(--color-danger-fg)' }}>
+            {elevenKeyError}
+          </div>
+        ) : null}
+        {elevenKeyNotice ? (
+          <div className="vw-type-caption" style={{ padding: 'var(--space-12)', color: 'var(--color-accent)' }}>
+            {elevenKeyNotice}
+          </div>
+        ) : null}
+
+        {draft.stt_provider === 'elevenlabs' && providers?.elevenlabs_api_key_error ? (
+          <div className="vw-type-caption" style={{ padding: 'var(--space-12)', color: 'var(--color-danger-fg)' }}>
+            ElevenLabs is selected but the OS keyring is unavailable. Recording will fail until this is resolved.
+          </div>
+        ) : null}
+
+        {draft.stt_provider === 'elevenlabs' && !providers?.elevenlabs_api_key_error && !providers?.elevenlabs_api_key_present ? (
           <div className="vw-type-caption" style={{ padding: 'var(--space-12)', color: 'var(--color-danger-fg)' }}>
             ElevenLabs is selected but no API key is set. Recording will fail until you add a key.
           </div>
@@ -360,13 +430,20 @@ export function SettingsPage() {
                 onClick={async () => {
                   try {
                     setSaving(true);
+                    setOpenaiKeyError(null);
+                    setOpenaiKeyNotice(null);
                     const { invoke } = await import('@tauri-apps/api/core');
-                    const next = await invoke<ProviderStatus>('set_openai_api_key', { apiKey: openaiApiKeyDraft });
+                    const next = await invoke<ProviderStatus>('set_openai_api_key', { api_key: openaiApiKeyDraft });
                     setProviders(next);
                     setOpenaiApiKeyDraft('');
+
+                    setOpenaiKeyNotice('Saved');
+                    window.setTimeout(() => setOpenaiKeyNotice(null), 2000);
                     await refresh();
                   } catch (e) {
-                    setError(String(e));
+                    const msg = String(e);
+                    setError(msg);
+                    setOpenaiKeyError(msg);
                   } finally {
                     setSaving(false);
                   }
@@ -381,13 +458,20 @@ export function SettingsPage() {
                 onClick={async () => {
                   try {
                     setSaving(true);
+                    setOpenaiKeyError(null);
+                    setOpenaiKeyNotice(null);
                     const { invoke } = await import('@tauri-apps/api/core');
                     const next = await invoke<ProviderStatus>('clear_openai_api_key');
                     setProviders(next);
                     setOpenaiApiKeyDraft('');
+
+                    setOpenaiKeyNotice('Cleared');
+                    window.setTimeout(() => setOpenaiKeyNotice(null), 2000);
                     await refresh();
                   } catch (e) {
-                    setError(String(e));
+                    const msg = String(e);
+                    setError(msg);
+                    setOpenaiKeyError(msg);
                   } finally {
                     setSaving(false);
                   }
@@ -398,6 +482,22 @@ export function SettingsPage() {
             </>
           }
         />
+
+        {openaiKeyStatusError ? (
+          <div className="vw-type-caption" style={{ padding: 'var(--space-12)', color: 'var(--color-danger-fg)' }}>
+            Keyring error: {openaiKeyStatusError}
+          </div>
+        ) : null}
+        {openaiKeyError ? (
+          <div className="vw-type-caption" style={{ padding: 'var(--space-12)', color: 'var(--color-danger-fg)' }}>
+            {openaiKeyError}
+          </div>
+        ) : null}
+        {openaiKeyNotice ? (
+          <div className="vw-type-caption" style={{ padding: 'var(--space-12)', color: 'var(--color-accent)' }}>
+            {openaiKeyNotice}
+          </div>
+        ) : null}
 
         <SettingRow
           title="Base URL"
@@ -469,7 +569,14 @@ export function SettingsPage() {
       ) : null}
 
       {dirty ? (
-        <div style={{ display: 'flex', gap: 'var(--space-12)', marginTop: 'var(--space-16)' }}>
+        <div
+          style={{
+            display: 'flex',
+            gap: 'var(--space-12)',
+            marginTop: 'var(--space-16)',
+            marginBottom: 'var(--space-24)',
+          }}
+        >
           <button
             type="button"
             className="vw-button vw-button--secondary"
@@ -523,7 +630,10 @@ export function SettingsPage() {
                       : draft.elevenlabs_stt_model,
                 },
               };
-              void saveConfig(nextCfg).then(() => setDirty(false));
+              void (async () => {
+                const ok = await saveConfig(nextCfg);
+                if (ok) setDirty(false);
+              })();
             }}
           >
             Save Changes

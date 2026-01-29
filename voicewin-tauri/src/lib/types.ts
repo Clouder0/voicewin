@@ -157,5 +157,7 @@ export function encodePowerModeProfile(p: PowerModeProfile): PowerModeProfileWir
 
 export type ProviderStatus = {
   openai_api_key_present: boolean;
+  openai_api_key_error?: string | null;
   elevenlabs_api_key_present: boolean;
+  elevenlabs_api_key_error?: string | null;
 };
