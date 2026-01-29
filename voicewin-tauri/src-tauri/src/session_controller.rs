@@ -1,4 +1,8 @@
 use std::sync::Arc;
+#[cfg(any(windows, target_os = "macos"))]
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(any(windows, target_os = "macos"))]
+use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant};
 
 use tauri::{Emitter, Manager};
@@ -6,11 +10,22 @@ use tokio::sync::Mutex;
 
 use voicewin_appcore::service::AppService;
 
+#[cfg(any(windows, target_os = "macos"))]
+use voicewin_runtime::secrets::{SecretKey, get_secret};
+
+#[cfg(any(windows, target_os = "macos"))]
+use voicewin_providers::elevenlabs_realtime::{
+    ElevenLabsRealtimeConfig, ElevenLabsRealtimeHandle, RealtimeEvent, spawn_realtime_session,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionStage {
     Idle,
     Recording,
+    // Realtime-only: we already streamed audio during recording, so after stop we may be
+    // finalizing the transcript (and/or running post-processing) rather than doing batch STT.
+    Finalizing,
     Transcribing,
 
     // These are emitted via the engine stage hook, but depending on config/user settings
@@ -24,6 +39,12 @@ pub enum SessionStage {
 }
 
 // `cargo check` on Linux doesn't compile the Windows/macOS recording path; keep warnings down.
+#[cfg(not(any(windows, target_os = "macos")))]
+#[allow(dead_code)]
+const _STAGE_KEEPALIVE_FINALIZING: SessionStage = SessionStage::Finalizing;
+#[cfg(not(any(windows, target_os = "macos")))]
+#[allow(dead_code)]
+const _STAGE_KEEPALIVE_TRANSCRIBING: SessionStage = SessionStage::Transcribing;
 #[cfg(not(any(windows, target_os = "macos")))]
 #[allow(dead_code)]
 const _STAGE_KEEPALIVE_ENHANCING: SessionStage = SessionStage::Enhancing;
@@ -59,7 +80,20 @@ pub struct MicLevelPayload {
     pub peak: f32,
 }
 
-#[derive(Debug, Default)]
+#[cfg(any(windows, target_os = "macos"))]
+struct RealtimeSttState {
+    handle: ElevenLabsRealtimeHandle,
+    sender_task: tauri::async_runtime::JoinHandle<()>,
+    receiver_task: tauri::async_runtime::JoinHandle<()>,
+    streaming_enabled: Arc<AtomicBool>,
+    dropped_chunks: Arc<AtomicU64>,
+
+    // Best-effort diagnostics/warnings to surface on stop (and persist to History).
+    last_error: Arc<StdMutex<Option<String>>>,
+    last_warning: Arc<StdMutex<Option<String>>>,
+}
+
+#[derive(Default)]
 struct Inner {
     stage: SessionStage,
     recording_started_at: Option<Instant>,
@@ -76,6 +110,9 @@ struct Inner {
     // When we stop recording we run the session pipeline (transcribe/enhance/insert)
     // in a background task so the UI stays responsive and we can cancel it.
     processing_task: Option<tauri::async_runtime::JoinHandle<()>>,
+
+    #[cfg(any(windows, target_os = "macos"))]
+    realtime_stt: Option<RealtimeSttState>,
 }
 
 #[derive(Clone, Default)]
@@ -233,6 +270,7 @@ impl SessionController {
                 inner.session_id = inner.session_id.wrapping_add(1);
                 inner.recording_started_at = Some(Instant::now());
                 inner.recording_elapsed_ms = None;
+                inner.last_text = None;
                 inner.status_message = None;
                 inner.status_message_expires_at = None;
             }
@@ -313,6 +351,20 @@ impl SessionController {
             SessionStage::Recording => {
                 #[cfg(any(windows, target_os = "macos"))]
                 {
+                    // Stop any realtime streaming immediately.
+                    let rt = {
+                        let mut inner = self.inner.lock().await;
+                        inner.realtime_stt.take()
+                    };
+                    if let Some(rt) = rt {
+                        rt.streaming_enabled.store(false, Ordering::Relaxed);
+                        rt.sender_task.abort();
+                        rt.receiver_task.abort();
+                        tauri::async_runtime::spawn(async move {
+                            rt.handle.shutdown().await;
+                        });
+                    }
+
                     if let Err(e) = svc.cancel_recording().await {
                         self.mark_error(app, e.to_string()).await;
                         return ToggleResult {
@@ -366,8 +418,28 @@ impl SessionController {
                     is_recording: false,
                 }
             }
-            SessionStage::Transcribing | SessionStage::Enhancing | SessionStage::Inserting => {
+            SessionStage::Finalizing
+            | SessionStage::Transcribing
+            | SessionStage::Enhancing
+            | SessionStage::Inserting => {
                 let _ = svc;
+
+                #[cfg(any(windows, target_os = "macos"))]
+                {
+                    // Defensive: if any realtime session is still around, shut it down.
+                    let rt = {
+                        let mut inner = self.inner.lock().await;
+                        inner.realtime_stt.take()
+                    };
+                    if let Some(rt) = rt {
+                        rt.streaming_enabled.store(false, Ordering::Relaxed);
+                        rt.sender_task.abort();
+                        rt.receiver_task.abort();
+                        tauri::async_runtime::spawn(async move {
+                            rt.handle.shutdown().await;
+                        });
+                    }
+                }
 
                 // Invalidate the current session and abort the in-flight pipeline task.
                 let (session_id, task) = {
@@ -468,6 +540,51 @@ impl SessionController {
                     let controller = self.clone();
                     let app_handle = app.clone();
 
+                    // If ElevenLabs realtime is selected, we will stream audio during recording
+                    // and then run the post-STT pipeline with a transcript override on stop.
+                    // NOTE: Use effective config so Power Mode profiles can enable realtime.
+                    let mut wants_realtime = false;
+                    let mut effective_language: Option<String> = None;
+                    if let Ok(cfg) = svc.load_config() {
+                        let app_id = svc
+                            .get_foreground_app()
+                            .await
+                            .unwrap_or_else(|_| voicewin_core::types::AppIdentity::new());
+                        let eff = voicewin_core::power_mode::resolve_effective_config(
+                            &cfg.defaults,
+                            &cfg.profiles,
+                            &app_id,
+                            &voicewin_core::power_mode::EphemeralOverrides::default(),
+                        );
+                        wants_realtime = voicewin_core::stt::is_elevenlabs_realtime_selected(
+                            &eff.stt_provider,
+                            &eff.stt_model,
+                        );
+                        effective_language = Some(eff.language);
+                    }
+
+                    let eleven_key = if wants_realtime {
+                        get_secret(SecretKey::ElevenLabsApiKey).ok().flatten().unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+
+                    if wants_realtime && eleven_key.trim().is_empty() {
+                        let msg = "ElevenLabs is selected but no API key is set. Open Settings -> ElevenLabs.".to_string();
+                        controller.mark_error(&app_handle, msg.clone()).await;
+                        return ToggleResult {
+                            stage: "error".into(),
+                            final_text: None,
+                            error: Some(msg),
+                            is_recording: false,
+                        };
+                    }
+
+                    // Realtime streaming plumbing.
+                    let streaming_enabled = Arc::new(AtomicBool::new(wants_realtime));
+                    let dropped_chunks = Arc::new(AtomicU64::new(0));
+                    let (audio_tx, mut audio_rx) = tokio::sync::mpsc::channel::<Vec<f32>>(64);
+
                     struct LevelEmitState {
                         last_emit: Instant,
                         smoothed_rms: f32,
@@ -486,8 +603,19 @@ impl SessionController {
                             let level_state = level_state.clone();
                             let controller = controller.clone();
                             let app_handle = app_handle.clone();
+                            let streaming_enabled = streaming_enabled.clone();
+                            let dropped_chunks = dropped_chunks.clone();
+                            let audio_tx = audio_tx.clone();
                             move |chunk: &[f32]| {
                                 let now = Instant::now();
+
+                                // For realtime STT, do NOT throttle or drop chunks here.
+                                // Send every chunk best-effort and let the bounded channel provide backpressure.
+                                if streaming_enabled.load(Ordering::Relaxed) {
+                                    if audio_tx.try_send(chunk.to_vec()).is_err() {
+                                        dropped_chunks.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                }
 
                                 let mut guard = match level_state.lock() {
                                     Ok(g) => g,
@@ -539,6 +667,164 @@ impl SessionController {
                             is_recording: false,
                         };
                     }
+
+                    // Start ElevenLabs realtime session after the recorder is opened, so we can
+                    // determine the device sample rate.
+                    if wants_realtime {
+                        let sr = svc
+                            .recording_sample_rate_hz()
+                            .await
+                            .unwrap_or(16_000);
+
+                        let mut rt_cfg = match ElevenLabsRealtimeConfig::production(eleven_key, sr) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                log::warn!("elevenlabs realtime disabled: {e}");
+                                streaming_enabled.store(false, Ordering::Relaxed);
+                                controller
+                                    .set_status_message(
+                                        &app_handle,
+                                        format!("ElevenLabs realtime disabled: {e}"),
+                                        Duration::from_millis(2500),
+                                    )
+                                    .await;
+                                return ToggleResult {
+                                    stage: "recording".into(),
+                                    final_text: None,
+                                    error: None,
+                                    is_recording: true,
+                                };
+                            }
+                        };
+
+                        // Respect the current effective language selection.
+                        let lang = effective_language.as_deref().unwrap_or("auto");
+                        rt_cfg.language_code = match lang {
+                            "auto" => None,
+                            other => Some(other.to_string()),
+                        };
+
+                        match spawn_realtime_session(rt_cfg).await {
+                            Ok((handle, mut events)) => {
+                                let last_error = Arc::new(StdMutex::new(None));
+                                let last_warning = Arc::new(StdMutex::new(None));
+                                let session_id_for_realtime = { controller.inner.lock().await.session_id };
+
+                                // Sender task: convert f32 -> PCM16 and stream to WS.
+                                let handle_for_sender = handle.clone();
+                                let streaming_enabled_for_sender = streaming_enabled.clone();
+                                let sender_task = tauri::async_runtime::spawn(async move {
+                                    while let Some(chunk) = audio_rx.recv().await {
+                                        if !streaming_enabled_for_sender.load(Ordering::Relaxed) {
+                                            continue;
+                                        }
+                                        let pcm = pcm_s16le_from_f32(&chunk);
+                                        if !handle_for_sender.send_audio_chunk(pcm).await {
+                                            // Realtime session died; disable streaming so the audio callback stops enqueueing.
+                                            streaming_enabled_for_sender.store(false, Ordering::Relaxed);
+                                            break;
+                                        }
+                                    }
+                                });
+
+                                // Receiver task: update overlay with live preview.
+                                let receiver_controller = controller.clone();
+                                let receiver_app = app_handle.clone();
+                                let streaming_enabled_for_receiver = streaming_enabled.clone();
+                                let last_error_for_receiver = last_error.clone();
+                                let last_warning_for_receiver = last_warning.clone();
+                                let receiver_task = tauri::async_runtime::spawn(async move {
+                                    let mut last_emit = Instant::now();
+                                    while let Some(evt) = events.recv().await {
+                                        // Don't let stale realtime updates leak into a cancelled/new session.
+                                        if receiver_controller.inner.lock().await.session_id != session_id_for_realtime {
+                                            break;
+                                        }
+
+                                        match evt {
+                                            RealtimeEvent::SessionStarted { .. } => {}
+                                            RealtimeEvent::LiveText { committed, partial } => {
+                                                let c = committed.trim();
+                                                let p = partial.trim();
+                                                let live = if c.is_empty() {
+                                                    p.to_string()
+                                                } else if p.is_empty() {
+                                                    c.to_string()
+                                                } else {
+                                                    format!("{c} {p}")
+                                                };
+                                                // Throttle UI updates a bit.
+                                                if last_emit.elapsed() < Duration::from_millis(200) {
+                                                    continue;
+                                                }
+                                                last_emit = Instant::now();
+                                                receiver_controller.set_last_text(Some(live)).await;
+                                                receiver_controller.emit_status(&receiver_app).await;
+                                            }
+                                            RealtimeEvent::Warning { kind: _, message } => {
+                                                // Persist the latest warning so stop-time History can reflect it.
+                                                if let Ok(mut guard) = last_warning_for_receiver.lock() {
+                                                    *guard = Some(message.clone());
+                                                }
+                                                receiver_controller
+                                                    .set_status_message(
+                                                        &receiver_app,
+                                                        message,
+                                                        Duration::from_millis(2500),
+                                                    )
+                                                    .await;
+                                            }
+                                            RealtimeEvent::Error { message_type, error } => {
+                                                // Stop feeding realtime immediately; we'll fall back to batch on stop.
+                                                streaming_enabled_for_receiver.store(false, Ordering::Relaxed);
+
+                                                // Store a concise detail for stop-time warnings.
+                                                if let Ok(mut guard) = last_error_for_receiver.lock() {
+                                                    *guard = Some(format!("{message_type}: {error}"));
+                                                }
+
+                                                receiver_controller
+                                                    .set_status_message(
+                                                        &receiver_app,
+                                                        format!("ElevenLabs realtime error ({message_type}): {error}"),
+                                                        Duration::from_millis(2500),
+                                                    )
+                                                    .await;
+
+                                                // Avoid spamming the HUD if more errors arrive.
+                                                break;
+                                            }
+                                        }
+                                    }
+                                });
+
+                                // Store realtime state for stop/cancel.
+                                {
+                                    let mut inner = controller.inner.lock().await;
+                                    inner.realtime_stt = Some(RealtimeSttState {
+                                        handle,
+                                        sender_task,
+                                        receiver_task,
+                                        streaming_enabled: streaming_enabled.clone(),
+                                        dropped_chunks: dropped_chunks.clone(),
+                                        last_error,
+                                        last_warning,
+                                    });
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!("failed to start ElevenLabs realtime; will fall back to batch on stop: {e}");
+                                streaming_enabled.store(false, Ordering::Relaxed);
+                                controller
+                                    .set_status_message(
+                                        &app_handle,
+                                        format!("ElevenLabs realtime unavailable; will use batch on stop. ({e})"),
+                                        Duration::from_millis(2500),
+                                    )
+                                    .await;
+                            }
+                        }
+                    }
                 }
 
                 ToggleResult {
@@ -551,10 +837,27 @@ impl SessionController {
             SessionStage::Recording => {
                 // Show first so the overlay doesn't miss the stage update.
                 Self::show_overlay(app);
-                self.set_stage(app, SessionStage::Transcribing).await;
 
                 #[cfg(any(windows, target_os = "macos"))]
                 {
+                    // Stop any realtime streaming for this session.
+                    let realtime = {
+                        let mut inner = self.inner.lock().await;
+                        inner.realtime_stt.take()
+                    };
+
+                    if realtime.is_some() {
+                        self.set_stage(app, SessionStage::Finalizing).await;
+                    } else {
+                        self.set_stage(app, SessionStage::Transcribing).await;
+                    }
+
+                    if let Some(rt) = realtime.as_ref() {
+                        rt.streaming_enabled.store(false, Ordering::Relaxed);
+                        // No more audio will be sent after stop; abort the sender task.
+                        rt.sender_task.abort();
+                    }
+
                     let audio = match svc.clone().stop_recording().await {
                         Ok(a) => a,
                         Err(e) => {
@@ -596,11 +899,92 @@ impl SessionController {
                         let controller_for_hook = controller.clone();
                         let app_for_hook = app_handle.clone();
 
+                        // If we were running ElevenLabs realtime, try to finalize and produce a transcript override.
+                        // If it fails, fall back to batch STT using the captured audio.
+                        let mut transcript_override = String::new();
+                        let mut warning: Option<String> = None;
+
+                        fn merge_warning(dst: &mut Option<String>, msg: String) {
+                            let msg = msg.trim().to_string();
+                            if msg.is_empty() {
+                                return;
+                            }
+                            *dst = match dst.take() {
+                                Some(existing) if !existing.trim().is_empty() => {
+                                    Some(format!("{existing} | {msg}"))
+                                }
+                                _ => Some(msg),
+                            };
+                        }
+
+                        if let Some(rt) = realtime {
+                            let dropped = rt.dropped_chunks.load(Ordering::Relaxed);
+                            if dropped > 0 {
+                                let msg = format!(
+                                    "ElevenLabs realtime dropped {dropped} audio chunks; transcript may be incomplete."
+                                );
+                                merge_warning(&mut warning, msg.clone());
+                                controller
+                                    .set_status_message(&app_handle, msg, Duration::from_millis(2500))
+                                    .await;
+                            }
+
+                            // Surface any provider-side warnings (e.g. outbound backpressure drops).
+                            if let Ok(guard) = rt.last_warning.lock() {
+                                if let Some(w) = guard.clone() {
+                                    merge_warning(&mut warning, w);
+                                }
+                            }
+
+                            match rt.handle.finalize().await {
+                                Ok(t) => {
+                                    if let Some(t) = voicewin_core::stt::accept_transcript_override(t) {
+                                        transcript_override = t;
+                                    } else {
+                                        let msg = "ElevenLabs realtime produced no text; using batch on stop.".to_string();
+                                        merge_warning(&mut warning, msg.clone());
+                                        controller
+                                            .set_status_message(
+                                                &app_handle,
+                                                msg,
+                                                Duration::from_millis(2500),
+                                            )
+                                            .await;
+                                    }
+                                }
+                                Err(e) => {
+                                    let detail = rt
+                                        .last_error
+                                        .lock()
+                                        .ok()
+                                        .and_then(|g| g.clone())
+                                        .unwrap_or_else(|| e.to_string());
+                                    let msg = format!(
+                                        "ElevenLabs realtime failed; using batch on stop. ({detail})"
+                                    );
+                                    merge_warning(&mut warning, msg.clone());
+                                    controller
+                                        .set_status_message(
+                                            &app_handle,
+                                            msg,
+                                            Duration::from_millis(2500),
+                                        )
+                                        .await;
+                                }
+                            }
+
+                            rt.receiver_task.abort();
+                            rt.handle.shutdown().await;
+                        }
+
+                        let using_override = !transcript_override.trim().is_empty();
+
                         let res = svc_for_task
                             .clone()
                             .run_session_with_hook(
                                 voicewin_runtime::ipc::RunSessionRequest {
-                                    transcript: String::new(),
+                                    transcript: transcript_override,
+                                    warning,
                                 },
                                 audio,
                                 move |stage| {
@@ -610,9 +994,12 @@ impl SessionController {
                                         // Map engine stage labels to overlay stages.
                                         match stage {
                                             "transcribing" => {
-                                                controller_for_hook
-                                                    .set_stage(&app_for_hook, SessionStage::Transcribing)
-                                                    .await;
+                                                let s = if using_override {
+                                                    SessionStage::Finalizing
+                                                } else {
+                                                    SessionStage::Transcribing
+                                                };
+                                                controller_for_hook.set_stage(&app_for_hook, s).await;
                                             }
                                             "enhancing" => {
                                                 controller_for_hook
@@ -774,6 +1161,7 @@ fn stage_label(stage: SessionStage) -> &'static str {
     match stage {
         SessionStage::Idle => "idle",
         SessionStage::Recording => "recording",
+        SessionStage::Finalizing => "finalizing",
         SessionStage::Transcribing => "transcribing",
         SessionStage::Enhancing => "enhancing",
         SessionStage::Inserting => "inserting",
@@ -791,6 +1179,18 @@ fn preview_text(text: &str) -> String {
     }
 
     trimmed.chars().take(MAX).collect::<String>() + "…"
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn pcm_s16le_from_f32(samples: &[f32]) -> Vec<u8> {
+    // Convert mono float samples to PCM16 little-endian bytes for ElevenLabs realtime.
+    let mut out = Vec::with_capacity(samples.len() * 2);
+    for &s in samples {
+        let v = s.clamp(-1.0, 1.0);
+        let i = (v * i16::MAX as f32).round() as i16;
+        out.extend_from_slice(&i.to_le_bytes());
+    }
+    out
 }
 
 #[allow(dead_code)]

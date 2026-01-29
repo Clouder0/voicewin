@@ -135,6 +135,12 @@ impl AppService {
         r.start()
     }
 
+    #[cfg(any(windows, target_os = "macos"))]
+    pub async fn recording_sample_rate_hz(&self) -> Option<u32> {
+        let recorder = self.recorder.lock().await;
+        recorder.as_ref().map(|r| r.sample_rate_hz())
+    }
+
     pub fn load_config(&self) -> anyhow::Result<AppConfig> {
         self.config_store.load()
     }
@@ -157,6 +163,10 @@ impl AppService {
 
     pub fn set_elevenlabs_api_key(&self, value: &str) -> anyhow::Result<()> {
         set_secret(SecretKey::ElevenLabsApiKey, value)
+    }
+
+    pub fn clear_elevenlabs_api_key(&self) -> anyhow::Result<()> {
+        delete_secret(SecretKey::ElevenLabsApiKey)
     }
 
     pub fn get_elevenlabs_api_key_present(&self) -> anyhow::Result<bool> {
@@ -193,6 +203,9 @@ impl AppService {
     {
         let cfg = self.config_store.load()?;
 
+        // Split request fields so we can move transcript into the engine call.
+        let RunSessionRequest { transcript, warning } = req;
+
         // Design-draft UI treats History as always enabled.
         // Keep the config flag for backward compatibility, but it must not disable history.
         let history_enabled = true;
@@ -201,13 +214,17 @@ impl AppService {
         let engine: VoicewinEngine =
             build_engine_from_config(cfg, self.ctx.clone(), self.inserter.clone()).await?;
 
-        // Reserved for future use (e.g. transcript override/debug).
-        let _ = req;
-
         // Run the full session pipeline and emit stage progress.
-        let res = engine.run_session_with_hook(audio, on_stage).await;
+        // If `req.transcript` is provided, skip STT and run from the given transcript.
+        let res = if transcript.trim().is_empty() {
+            engine.run_session_with_hook(audio, on_stage).await
+        } else {
+            engine
+                .run_session_with_transcript_with_hook(transcript, on_stage)
+                .await
+        };
 
-        let (stage, final_text, error) = match res {
+        let (stage, final_text, mut error) = match res {
             Ok(result) => {
                 let stage = result
                     .stage_label
@@ -219,6 +236,16 @@ impl AppService {
                 ("error".into(), None, Some(e.to_string()))
             }
         };
+
+        // Attach any extra warning requested by the caller.
+        if let Some(w) = warning.as_ref().filter(|s| !s.trim().is_empty()) {
+            error = match error {
+                Some(existing) if !existing.trim().is_empty() => {
+                    Some(format!("{existing} | {w}"))
+                }
+                _ => Some(w.to_string()),
+            };
+        }
 
         if history_enabled {
             let should_write = final_text
@@ -351,6 +378,7 @@ mod tests {
             .run_session(
                 RunSessionRequest {
                     transcript: "hi".into(),
+                    warning: None,
                 },
                 audio,
             )

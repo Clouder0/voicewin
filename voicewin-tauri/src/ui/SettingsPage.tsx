@@ -2,6 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { AppConfig, ProviderStatus } from '../lib/types';
 
+type ModelStatus = {
+  bootstrap_ok: boolean;
+  bootstrap_path: string;
+  preferred_ok: boolean;
+  preferred_path: string;
+};
+
 function SettingRow({
   title,
   description,
@@ -53,6 +60,7 @@ function Section({ title, subtitle, children }: { title: string; subtitle?: stri
 export function SettingsPage() {
   const [cfg, setCfg] = useState<AppConfig | null>(null);
   const [providers, setProviders] = useState<ProviderStatus | null>(null);
+  const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -61,9 +69,14 @@ export function SettingsPage() {
     enable_enhancement: false,
     llm_base_url: '',
     llm_model: '',
+
+    stt_provider: 'local',
+    local_stt_model_path: '',
+    elevenlabs_stt_model: 'scribe_v2',
   });
 
-  const [apiKeyDraft, setApiKeyDraft] = useState('');
+  const [openaiApiKeyDraft, setOpenaiApiKeyDraft] = useState('');
+  const [elevenApiKeyDraft, setElevenApiKeyDraft] = useState('');
 
   const refresh = useCallback(async () => {
     try {
@@ -72,9 +85,11 @@ export function SettingsPage() {
 
       const nextCfg = await invoke<AppConfig>('get_config');
       const nextProviders = await invoke<ProviderStatus>('get_provider_status');
+      const nextModelStatus = await invoke<ModelStatus>('get_model_status');
 
       setCfg(nextCfg);
       setProviders(nextProviders);
+      setModelStatus(nextModelStatus);
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -108,16 +123,34 @@ export function SettingsPage() {
     if (!cfg) return;
     // Only overwrite drafts when the user has no pending edits.
     if (dirty) return;
+
+    const localDefault = modelStatus?.preferred_ok
+      ? modelStatus.preferred_path
+      : modelStatus?.bootstrap_path ?? '';
+
+    const isLocal = cfg.defaults.stt_provider === 'local';
+    const currentEleven = cfg.defaults.stt_provider === 'elevenlabs' ? cfg.defaults.stt_model : 'scribe_v2';
+    const normalizedEleven = currentEleven === 'scribe_v2_realtime' ? 'scribe_v2_realtime' : 'scribe_v2';
+
     setDraft({
       enable_enhancement: Boolean(cfg.defaults.enable_enhancement),
       llm_base_url: cfg.defaults.llm_base_url ?? '',
       llm_model: cfg.defaults.llm_model ?? '',
+
+      stt_provider: (cfg.defaults.stt_provider === 'elevenlabs' ? 'elevenlabs' : 'local') as 'local' | 'elevenlabs',
+      local_stt_model_path: isLocal ? cfg.defaults.stt_model : localDefault,
+      elevenlabs_stt_model: normalizedEleven as 'scribe_v2' | 'scribe_v2_realtime',
     });
-  }, [cfg, dirty]);
+  }, [cfg, dirty, modelStatus]);
 
   const openaiKeyStatus = useMemo(() => {
     if (!providers) return 'Unknown';
     return providers.openai_api_key_present ? 'Set' : 'Not set';
+  }, [providers]);
+
+  const elevenKeyStatus = useMemo(() => {
+    if (!providers) return 'Unknown';
+    return providers.elevenlabs_api_key_present ? 'Set' : 'Not set';
   }, [providers]);
 
   const baseUrlLooksMissingV1 = useMemo(() => {
@@ -153,6 +186,130 @@ export function SettingsPage() {
           {error}
         </div>
       ) : null}
+
+      <Section
+        title="Speech-to-Text"
+        subtitle="Choose the transcription engine. Local Whisper runs on-device; ElevenLabs uses cloud STT."
+      >
+        <SettingRow
+          title="Provider"
+          description="Local is private but can be slower on low-power CPUs. ElevenLabs can be faster but sends audio to the cloud."
+          right={
+            <select
+              className="vw-input"
+              value={draft.stt_provider}
+              disabled={saving}
+              onChange={(e) => {
+                const next = e.target.value === 'elevenlabs' ? 'elevenlabs' : 'local';
+                setDirty(true);
+                setDraft((d) => ({ ...d, stt_provider: next }));
+              }}
+            >
+              <option value="local">Local Whisper</option>
+              <option value="elevenlabs">ElevenLabs</option>
+            </select>
+          }
+        />
+
+        {draft.stt_provider === 'local' ? (
+          <SettingRow
+            title="Local model"
+            description="Use the Models tab to download/switch local Whisper models."
+            right={<span className="vw-type-caption">Configured</span>}
+          />
+        ) : (
+          <SettingRow
+            title="ElevenLabs model"
+            description="Batch sends audio on stop. Realtime streams during recording (VAD + stop flush) but still inserts only on stop."
+            right={
+              <select
+                className="vw-input"
+                value={draft.elevenlabs_stt_model}
+                disabled={saving}
+                onChange={(e) => {
+                  const v = e.target.value === 'scribe_v2_realtime' ? 'scribe_v2_realtime' : 'scribe_v2';
+                  setDirty(true);
+                  setDraft((d) => ({ ...d, elevenlabs_stt_model: v }));
+                }}
+              >
+                <option value="scribe_v2">Scribe v2 (Batch)</option>
+                <option value="scribe_v2_realtime">Scribe v2 (Realtime)</option>
+              </select>
+            }
+          />
+        )}
+      </Section>
+
+      <Section
+        title="ElevenLabs"
+        subtitle="Required only when ElevenLabs STT is selected. The key is stored in the OS keyring (not in config.json)."
+      >
+        <SettingRow
+          title="API key"
+          description={`Status: ${elevenKeyStatus}.`}
+          right={
+            <>
+              <input
+                className="vw-input"
+                type="password"
+                placeholder="Paste xi-api-key…"
+                value={elevenApiKeyDraft}
+                onChange={(e) => setElevenApiKeyDraft(e.target.value)}
+                style={{ width: 260 }}
+                disabled={saving}
+              />
+              <button
+                type="button"
+                className="vw-button vw-button--secondary"
+                disabled={saving}
+                onClick={async () => {
+                  try {
+                    setSaving(true);
+                    const { invoke } = await import('@tauri-apps/api/core');
+                    const next = await invoke<ProviderStatus>('set_elevenlabs_api_key', { apiKey: elevenApiKeyDraft });
+                    setProviders(next);
+                    setElevenApiKeyDraft('');
+                    await refresh();
+                  } catch (e) {
+                    setError(String(e));
+                  } finally {
+                    setSaving(false);
+                  }
+                }}
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                className="vw-button vw-button--secondary"
+                disabled={saving}
+                onClick={async () => {
+                  try {
+                    setSaving(true);
+                    const { invoke } = await import('@tauri-apps/api/core');
+                    const next = await invoke<ProviderStatus>('clear_elevenlabs_api_key');
+                    setProviders(next);
+                    setElevenApiKeyDraft('');
+                    await refresh();
+                  } catch (e) {
+                    setError(String(e));
+                  } finally {
+                    setSaving(false);
+                  }
+                }}
+              >
+                Clear
+              </button>
+            </>
+          }
+        />
+
+        {draft.stt_provider === 'elevenlabs' && !providers?.elevenlabs_api_key_present ? (
+          <div className="vw-type-caption" style={{ padding: 'var(--space-12)', color: 'var(--color-danger-fg)' }}>
+            ElevenLabs is selected but no API key is set. Recording will fail until you add a key.
+          </div>
+        ) : null}
+      </Section>
 
       <Section
         title="Enhancement"
@@ -191,8 +348,8 @@ export function SettingsPage() {
                 className="vw-input"
                 type="password"
                 placeholder="Paste key…"
-                value={apiKeyDraft}
-                onChange={(e) => setApiKeyDraft(e.target.value)}
+                value={openaiApiKeyDraft}
+                onChange={(e) => setOpenaiApiKeyDraft(e.target.value)}
                 style={{ width: 260 }}
                 disabled={saving}
               />
@@ -204,9 +361,9 @@ export function SettingsPage() {
                   try {
                     setSaving(true);
                     const { invoke } = await import('@tauri-apps/api/core');
-                    const next = await invoke<ProviderStatus>('set_openai_api_key', { apiKey: apiKeyDraft });
+                    const next = await invoke<ProviderStatus>('set_openai_api_key', { apiKey: openaiApiKeyDraft });
                     setProviders(next);
-                    setApiKeyDraft('');
+                    setOpenaiApiKeyDraft('');
                     await refresh();
                   } catch (e) {
                     setError(String(e));
@@ -227,7 +384,7 @@ export function SettingsPage() {
                     const { invoke } = await import('@tauri-apps/api/core');
                     const next = await invoke<ProviderStatus>('clear_openai_api_key');
                     setProviders(next);
-                    setApiKeyDraft('');
+                    setOpenaiApiKeyDraft('');
                     await refresh();
                   } catch (e) {
                     setError(String(e));
@@ -323,6 +480,20 @@ export function SettingsPage() {
                 enable_enhancement: Boolean(cfg.defaults.enable_enhancement),
                 llm_base_url: cfg.defaults.llm_base_url ?? '',
                 llm_model: cfg.defaults.llm_model ?? '',
+
+                stt_provider: (cfg.defaults.stt_provider === 'elevenlabs' ? 'elevenlabs' : 'local') as
+                  | 'local'
+                  | 'elevenlabs',
+                local_stt_model_path:
+                  cfg.defaults.stt_provider === 'local'
+                    ? cfg.defaults.stt_model
+                    : (modelStatus?.preferred_ok
+                        ? modelStatus.preferred_path
+                        : modelStatus?.bootstrap_path ?? ''),
+                elevenlabs_stt_model:
+                  cfg.defaults.stt_provider === 'elevenlabs' && cfg.defaults.stt_model === 'scribe_v2_realtime'
+                    ? 'scribe_v2_realtime'
+                    : 'scribe_v2',
               });
             }}
           >
@@ -341,6 +512,15 @@ export function SettingsPage() {
                   enable_enhancement: Boolean(draft.enable_enhancement),
                   llm_base_url: draft.llm_base_url.trim() || cfg.defaults.llm_base_url,
                   llm_model: draft.llm_model.trim() || cfg.defaults.llm_model,
+
+                  stt_provider: draft.stt_provider,
+                  stt_model:
+                    draft.stt_provider === 'local'
+                      ? (draft.local_stt_model_path.trim() ||
+                          (modelStatus?.preferred_ok
+                            ? modelStatus.preferred_path
+                            : modelStatus?.bootstrap_path ?? cfg.defaults.stt_model))
+                      : draft.elevenlabs_stt_model,
                 },
               };
               void saveConfig(nextCfg).then(() => setDirty(false));

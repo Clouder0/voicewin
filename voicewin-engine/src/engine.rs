@@ -126,25 +126,90 @@ impl VoicewinEngine {
             .await?;
         let transcription_ms = ms(t0.elapsed());
 
+        self.run_post_stt_pipeline(result, eff, ctx_snapshot, transcript, Some(transcription_ms), on_stage)
+            .await
+    }
+
+    /// Runs the post-STT pipeline (optional enhance -> insert) given a transcript.
+    ///
+    /// Used by realtime providers to reuse the same enhancement/insertion logic.
+    pub async fn run_session_with_transcript_with_hook<F, Fut>(
+        &self,
+        transcript_text: String,
+        on_stage: F,
+    ) -> anyhow::Result<SessionResult>
+    where
+        F: Fn(&'static str) -> Fut,
+        Fut: Future<Output = ()>,
+    {
+        let app = self.context_provider.foreground_app().await?;
+        let ctx_snapshot = self
+            .context_provider
+            .snapshot_context()
+            .await
+            .unwrap_or_default();
+
+        let ephemeral = EphemeralOverrides::default();
+        let eff =
+            resolve_effective_config(&self.cfg.defaults, &self.cfg.profiles, &app, &ephemeral);
+
+        let mut result = SessionResult::success(
+            app.clone(),
+            eff.clone(),
+            String::new(),
+            eff.insert_mode,
+            ctx_snapshot.clone(),
+        );
+
+        result.stage = SessionStage::Recording;
+        result.stage_label = Some(STAGE_RECORDING.into());
+        on_stage(STAGE_RECORDING).await;
+
+        result.stage = SessionStage::Transcribing;
+        result.stage_label = Some(STAGE_TRANSCRIBING.into());
+        on_stage(STAGE_TRANSCRIBING).await;
+
+        let transcript = crate::traits::Transcript {
+            text: transcript_text,
+            provider: eff.stt_provider.clone(),
+            model: eff.stt_model.clone(),
+        };
+
+        self.run_post_stt_pipeline(result, eff, ctx_snapshot, transcript, None, on_stage)
+            .await
+    }
+
+    async fn run_post_stt_pipeline<F, Fut>(
+        &self,
+        mut result: SessionResult,
+        eff: voicewin_core::power_mode::EffectiveConfig,
+        ctx_snapshot: crate::traits::ContextSnapshot,
+        transcript: crate::traits::Transcript,
+        transcription_ms: Option<u64>,
+        on_stage: F,
+    ) -> anyhow::Result<SessionResult>
+    where
+        F: Fn(&'static str) -> Fut,
+        Fut: Future<Output = ()>,
+    {
         let mut final_text = filter_transcription_output(&transcript.text);
 
-        // If Whisper produced no usable text (e.g. silence or extremely quiet audio),
-        // do not pretend we "inserted" successfully.
         if final_text.trim().is_empty() {
             result.stage = SessionStage::Failed;
             result.stage_label = Some("failed".into());
             result.transcript = Some(transcript);
-            result.timings.transcription_ms = Some(transcription_ms);
-            result.error = Some("No speech detected. Try speaking louder or selecting the correct microphone.".into());
+            result.timings.transcription_ms = transcription_ms;
+            result.error = Some(
+                "No speech detected. Try speaking louder or selecting the correct microphone.".into(),
+            );
             return Ok(result);
         }
 
         let has_llm_key = !self.cfg.llm_api_key.trim().is_empty();
 
-        // 2) Trigger word prompt override (VoiceInk behavior)
+        // Trigger word prompt override (VoiceInk behavior)
         let mut prompt_id = eff.prompt_id.clone();
         let detection = detect_trigger_word(&final_text, &self.cfg.prompts);
-        // Only treat trigger words as commands when enhancement is actually available.
         if has_llm_key && detection.should_enable_enhancement {
             final_text = detection.processed_transcript;
             prompt_id = detection.selected_prompt_id;
@@ -153,11 +218,8 @@ impl VoicewinEngine {
         let mut enhanced = None;
         let mut enhancement_ms = None;
 
-        // Enhancement is optional. If the user hasn't configured an API key, we
-        // must not fail the entire session.
         let wants_enhancement = eff.enable_enhancement || detection.should_enable_enhancement;
         if wants_enhancement && has_llm_key {
-            // 3) Enhance
             result.stage = SessionStage::Enhancing;
             result.stage_label = Some(STAGE_ENHANCING.into());
             on_stage(STAGE_ENHANCING).await;
@@ -213,10 +275,6 @@ impl VoicewinEngine {
                     enhanced = Some(llm_out);
                 }
                 Err(e) => {
-                    // Best-effort: keep the raw transcript if enhancement fails.
-                    // The session should still insert text and succeed.
-                    //
-                    // Surface a short warning (without failing the session).
                     let mut msg = e.to_string();
                     if msg.len() > 140 {
                         msg.truncate(140);
@@ -229,10 +287,8 @@ impl VoicewinEngine {
             }
         }
 
-        // Make the output text recoverable even if insertion fails.
         result.final_text = Some(final_text.clone());
 
-        // 4) Insert
         result.stage = SessionStage::Inserting;
         result.stage_label = Some(STAGE_INSERTING.into());
         on_stage(STAGE_INSERTING).await;
@@ -243,7 +299,7 @@ impl VoicewinEngine {
             result.stage_label = Some("failed".into());
             result.transcript = Some(transcript);
             result.enhanced = enhanced;
-            result.timings.transcription_ms = Some(transcription_ms);
+            result.timings.transcription_ms = transcription_ms;
             result.timings.enhancement_ms = enhancement_ms;
             result.error = Some(e.to_string());
             return Ok(result);
@@ -253,7 +309,7 @@ impl VoicewinEngine {
         result.stage_label = Some(STAGE_DONE.into());
         result.transcript = Some(transcript);
         result.enhanced = enhanced;
-        result.timings.transcription_ms = Some(transcription_ms);
+        result.timings.transcription_ms = transcription_ms;
         result.timings.enhancement_ms = enhancement_ms;
         Ok(result)
     }

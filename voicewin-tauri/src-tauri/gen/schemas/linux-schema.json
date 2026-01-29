@@ -189,6 +189,12 @@
           "markdownDescription": "Enables the capture_foreground_app command without any pre-configured scope."
         },
         {
+          "description": "Enables the clear_elevenlabs_api_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-clear-elevenlabs-api-key",
+          "markdownDescription": "Enables the clear_elevenlabs_api_key command without any pre-configured scope."
+        },
+        {
           "description": "Enables the clear_history command without any pre-configured scope.",
           "type": "string",
           "const": "allow-clear-history",
@@ -313,6 +319,12 @@
           "type": "string",
           "const": "allow-set-config",
           "markdownDescription": "Enables the set_config command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_elevenlabs_api_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-elevenlabs-api-key",
+          "markdownDescription": "Enables the set_elevenlabs_api_key command without any pre-configured scope."
         },
         {
           "description": "Enables the set_openai_api_key command without any pre-configured scope.",

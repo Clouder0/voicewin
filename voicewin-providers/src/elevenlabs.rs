@@ -39,7 +39,11 @@ pub fn build_elevenlabs_stt_request(cfg: &ElevenLabsSttConfig, audio: &AudioFile
     );
     append_field(&mut body, &boundary, "model_id", &cfg.model_id);
     append_field(&mut body, &boundary, "temperature", "0.0");
+    // Dictation defaults (smaller response + lower overhead).
+    append_field(&mut body, &boundary, "timestamps_granularity", "none");
+    append_field(&mut body, &boundary, "diarize", "false");
     append_field(&mut body, &boundary, "tag_audio_events", "false");
+    append_field(&mut body, &boundary, "file_format", "pcm_s16le_16");
 
     if let Some(lang) = cfg.language_code.as_ref().filter(|s| !s.trim().is_empty()) {
         append_field(&mut body, &boundary, "language_code", lang);
@@ -103,12 +107,12 @@ mod tests {
     fn builds_multipart_with_xi_api_key() {
         let cfg = ElevenLabsSttConfig {
             api_key: "k".into(),
-            model_id: "scribe_v1".into(),
+            model_id: "scribe_v2".into(),
             language_code: Some("en".into()),
         };
         let audio = AudioFile {
-            filename: "a.wav".into(),
-            mime_type: "audio/wav".into(),
+            filename: "a.pcm".into(),
+            mime_type: "application/octet-stream".into(),
             bytes: vec![1, 2, 3],
         };
         let req = build_elevenlabs_stt_request(&cfg, &audio);
@@ -120,9 +124,15 @@ mod tests {
             Body::MultipartFormData { bytes, .. } => {
                 let s = String::from_utf8_lossy(&bytes);
                 assert!(s.contains("name=\"model_id\""));
-                assert!(s.contains("scribe_v1"));
+                assert!(s.contains("scribe_v2"));
                 assert!(s.contains("name=\"language_code\""));
                 assert!(s.contains("en"));
+                assert!(s.contains("name=\"timestamps_granularity\""));
+                assert!(s.contains("none"));
+                assert!(s.contains("name=\"diarize\""));
+                assert!(s.contains("false"));
+                assert!(s.contains("name=\"file_format\""));
+                assert!(s.contains("pcm_s16le_16"));
             }
             _ => panic!("expected multipart"),
         }

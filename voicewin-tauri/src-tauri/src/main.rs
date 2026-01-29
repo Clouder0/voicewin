@@ -74,6 +74,8 @@ static DOWNLOADING_MODELS: std::sync::OnceLock<std::sync::Mutex<std::collections
 const EVENT_MODEL_DOWNLOAD_PROGRESS: &str = "voicewin://model_download_progress";
 const EVENT_MODEL_DOWNLOAD_DONE: &str = "voicewin://model_download_done";
 
+const BUNDLED_TINY_MODEL_ID: &str = "whisper-tiny-bundled";
+
 #[cfg(any(windows, target_os = "macos"))]
 use voicewin_audio::AudioRecorder;
 
@@ -713,6 +715,50 @@ async fn clear_openai_api_key(
     })
 }
 
+#[tauri::command]
+async fn set_elevenlabs_api_key(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    api_key: String,
+) -> Result<ProviderStatus, String> {
+    let svc = state
+        .service
+        .get_or_try_init(|| async { build_service(&app).await })
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let trimmed = api_key.trim();
+    if trimmed.is_empty() {
+        svc.clear_elevenlabs_api_key().map_err(|e| e.to_string())?;
+    } else {
+        svc.set_elevenlabs_api_key(trimmed)
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(ProviderStatus {
+        openai_api_key_present: svc.get_openai_api_key_present().unwrap_or(false),
+        elevenlabs_api_key_present: svc.get_elevenlabs_api_key_present().unwrap_or(false),
+    })
+}
+
+#[tauri::command]
+async fn clear_elevenlabs_api_key(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<ProviderStatus, String> {
+    let svc = state
+        .service
+        .get_or_try_init(|| async { build_service(&app).await })
+        .await
+        .map_err(|e| e.to_string())?;
+
+    svc.clear_elevenlabs_api_key().map_err(|e| e.to_string())?;
+    Ok(ProviderStatus {
+        openai_api_key_present: svc.get_openai_api_key_present().unwrap_or(false),
+        elevenlabs_api_key_present: svc.get_elevenlabs_api_key_present().unwrap_or(false),
+    })
+}
+
 #[cfg(any(windows, target_os = "macos"))]
 #[tauri::command]
 async fn list_microphones() -> Result<Vec<String>, String> {
@@ -759,11 +805,58 @@ async fn list_models(
 
     let active_path = std::path::PathBuf::from(cfg.defaults.stt_model);
 
+    fn paths_equivalent(a: &std::path::Path, b: &std::path::Path) -> bool {
+        if a == b {
+            return true;
+        }
+
+        #[cfg(windows)]
+        {
+            fn norm(p: &std::path::Path) -> String {
+                let mut s = p.to_string_lossy().to_string();
+                // Normalize separators + casing.
+                s = s.replace('/', "\\");
+                let lower = s.to_ascii_lowercase();
+                // Strip Windows verbatim prefix if present.
+                lower
+                    .strip_prefix("\\\\?\\")
+                    .unwrap_or(&lower)
+                    .to_string()
+            }
+
+            return norm(a) == norm(b);
+        }
+
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    }
+
     let mut out = Vec::new();
+
+    // Include the bundled bootstrap model as a selectable entry.
+    let bootstrap_path = voicewin_runtime::models::installed_bootstrap_model_path(&app_data_dir);
+    let bootstrap_size = std::fs::metadata(&bootstrap_path).map(|m| m.len()).ok();
+    let bootstrap_installed = voicewin_runtime::models::validate_ggml_file(&bootstrap_path, 1024 * 1024).is_ok();
+    let bootstrap_active = paths_equivalent(&active_path, &bootstrap_path);
+    out.push(ModelCatalogEntry {
+        id: BUNDLED_TINY_MODEL_ID.into(),
+        title: "Whisper Tiny (Bundled)".into(),
+        recommended: false,
+        filename: voicewin_runtime::models::BOOTSTRAP_MODEL_FILENAME.into(),
+        size_bytes: bootstrap_size,
+        speed_label: Some("Fast".into()),
+        accuracy_label: Some("OK".into()),
+        installed: bootstrap_installed,
+        active: bootstrap_installed && bootstrap_active,
+        downloading: false,
+    });
+
     for spec in voicewin_runtime::models::whisper_catalog() {
         let path = models_dir.join(&spec.filename);
         let installed = path.exists();
-        let active = installed && active_path == path;
+        let active = installed && paths_equivalent(&active_path, &path);
 
         let downloading = DOWNLOADING_MODELS
             .get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
@@ -805,6 +898,15 @@ async fn set_active_model(
 
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let models_dir = voicewin_runtime::models::models_dir(&app_data_dir);
+
+    if model_id == BUNDLED_TINY_MODEL_ID {
+        // Ensure the bundled model exists; if the user deleted it, restore from app resources.
+        let path = ensure_bootstrap_model(&app).map_err(|e| e.to_string())?;
+        cfg.defaults.stt_provider = "local".into();
+        cfg.defaults.stt_model = path.to_string_lossy().to_string();
+        validate_config(&cfg)?;
+        return svc.save_config(&cfg).map_err(|e| e.to_string());
+    }
 
     let spec = voicewin_runtime::models::whisper_catalog()
         .into_iter()
@@ -1181,6 +1283,8 @@ fn main() {
             get_provider_status,
             set_openai_api_key,
             clear_openai_api_key,
+            set_elevenlabs_api_key,
+            clear_elevenlabs_api_key,
             get_model_status,
             #[cfg(any(windows, target_os = "macos"))]
             list_microphones,

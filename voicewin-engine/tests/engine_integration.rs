@@ -59,6 +59,21 @@ impl SttProvider for TestStt {
     }
 }
 
+struct PanicStt;
+
+#[async_trait::async_trait]
+impl SttProvider for PanicStt {
+    async fn transcribe(
+        &self,
+        _audio: &AudioInput,
+        _provider: &str,
+        _model: &str,
+        _language: &str,
+    ) -> anyhow::Result<Transcript> {
+        panic!("STT should not be called when transcript override is provided")
+    }
+}
+
 struct OpenAiCompatibleLlm;
 
 #[async_trait::async_trait]
@@ -252,4 +267,91 @@ async fn trigger_words_do_not_strip_without_llm_key() {
         text.contains("rewrite"),
         "trigger word should not be stripped when enhancement is unavailable"
     );
+}
+
+#[tokio::test]
+async fn transcript_override_skips_stt_and_inserts() {
+    let defaults = GlobalDefaults {
+        enable_enhancement: false,
+        prompt_id: None,
+        insert_mode: InsertMode::Paste,
+        stt_provider: "elevenlabs".into(),
+        stt_model: "scribe_v2_realtime".into(),
+        language: "en".into(),
+        llm_base_url: "https://api.example.com/v1".into(),
+        llm_model: "gpt-4o-mini".into(),
+        microphone_device: None,
+        history_enabled: true,
+        context: voicewin_core::context::ContextToggles::default(),
+    };
+
+    let inserted = Arc::new(std::sync::Mutex::new(vec![]));
+
+    let engine = VoicewinEngine::new(
+        EngineConfig {
+            defaults,
+            profiles: vec![],
+            prompts: vec![],
+            llm_api_key: "".into(),
+        },
+        Arc::new(TestContext),
+        Arc::new(PanicStt),
+        Arc::new(PanicLlm),
+        Arc::new(TestInserter {
+            inserted: inserted.clone(),
+        }),
+    );
+
+    let res = engine
+        .run_session_with_transcript_with_hook("hello world".into(), |_stage| async {})
+        .await
+        .unwrap();
+    assert_eq!(res.final_text.as_deref(), Some("hello world"));
+
+    let inserted = inserted.lock().unwrap();
+    assert_eq!(inserted.len(), 1);
+    assert_eq!(inserted[0].0, "hello world");
+}
+
+#[tokio::test]
+async fn transcript_override_empty_is_failure() {
+    let defaults = GlobalDefaults {
+        enable_enhancement: false,
+        prompt_id: None,
+        insert_mode: InsertMode::Paste,
+        stt_provider: "elevenlabs".into(),
+        stt_model: "scribe_v2_realtime".into(),
+        language: "en".into(),
+        llm_base_url: "https://api.example.com/v1".into(),
+        llm_model: "gpt-4o-mini".into(),
+        microphone_device: None,
+        history_enabled: true,
+        context: voicewin_core::context::ContextToggles::default(),
+    };
+
+    let engine = VoicewinEngine::new(
+        EngineConfig {
+            defaults,
+            profiles: vec![],
+            prompts: vec![],
+            llm_api_key: "".into(),
+        },
+        Arc::new(TestContext),
+        Arc::new(PanicStt),
+        Arc::new(PanicLlm),
+        Arc::new(TestInserter {
+            inserted: Arc::new(std::sync::Mutex::new(vec![])),
+        }),
+    );
+
+    let res = engine
+        .run_session_with_transcript_with_hook("   ".into(), |_stage| async {})
+        .await
+        .unwrap();
+    assert_eq!(res.stage_label.as_deref(), Some("failed"));
+    assert!(res
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("No speech detected"));
 }

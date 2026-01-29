@@ -19,6 +19,8 @@
     "allow-get-provider-status",
     "allow-set-openai-api-key",
     "allow-clear-openai-api-key",
+    "allow-set-elevenlabs-api-key",
+    "allow-clear-elevenlabs-api-key",
 
     "allow-get-model-status",
 

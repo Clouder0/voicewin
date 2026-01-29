@@ -40,6 +40,18 @@ pub fn encode_wav_mono_f32le(samples: &[f32], sample_rate_hz: u32) -> Vec<u8> {
     out
 }
 
+pub fn encode_pcm_s16le_mono(samples: &[f32]) -> Vec<u8> {
+    // PCM16 little-endian, mono.
+    // Used for low-latency ElevenLabs STT (`file_format=pcm_s16le_16`).
+    let mut out = Vec::with_capacity(samples.len() * 2);
+    for &s in samples {
+        let v = s.clamp(-1.0, 1.0);
+        let i = (v * i16::MAX as f32).round() as i16;
+        out.extend_from_slice(&i.to_le_bytes());
+    }
+    out
+}
+
 #[derive(Clone)]
 pub struct ElevenLabsSttProvider {
     api_key: String,
@@ -74,9 +86,20 @@ impl voicewin_engine::traits::SttProvider for ElevenLabsSttProvider {
             return Err(anyhow::anyhow!("unsupported STT provider: {provider}"));
         }
 
+        // VoiceWin exposes "scribe_v2_realtime" as a separate model selector, but
+        // the batch HTTP endpoint expects "scribe_v2".
+        let model_id = voicewin_core::stt::normalize_elevenlabs_batch_model(model);
+
+        if audio.sample_rate_hz != 16_000 {
+            return Err(anyhow::anyhow!(
+                "ElevenLabs STT expects 16kHz audio (got {}Hz)",
+                audio.sample_rate_hz
+            ));
+        }
+
         let cfg = voicewin_providers::elevenlabs::ElevenLabsSttConfig {
             api_key: self.api_key.clone(),
-            model_id: model.to_string(),
+             model_id: model_id.to_string(),
             language_code: match language {
                 "auto" => None,
                 other => Some(other.to_string()),
@@ -87,14 +110,14 @@ impl voicewin_engine::traits::SttProvider for ElevenLabsSttProvider {
             return Err(anyhow::anyhow!("missing ElevenLabs API key"));
         }
 
-        let wav = encode_wav_mono_f32le(&audio.samples, audio.sample_rate_hz);
+        let pcm = encode_pcm_s16le_mono(&audio.samples);
 
         let req = voicewin_providers::elevenlabs::build_elevenlabs_stt_request(
             &cfg,
             &voicewin_providers::elevenlabs::AudioFile {
-                filename: "input.wav".into(),
-                mime_type: "audio/wav".into(),
-                bytes: wav,
+                filename: "input.pcm".into(),
+                mime_type: "application/octet-stream".into(),
+                bytes: pcm,
             },
         );
 
@@ -149,5 +172,11 @@ mod tests {
         assert!(wav[8..12].eq(b"WAVE"));
         assert!(wav.windows(4).any(|w| w == b"fmt "));
         assert!(wav.windows(4).any(|w| w == b"data"));
+    }
+
+    #[test]
+    fn pcm_s16le_has_expected_length() {
+        let pcm = encode_pcm_s16le_mono(&[0.0, 1.0, -1.0]);
+        assert_eq!(pcm.len(), 3 * 2);
     }
 }

@@ -70,6 +70,16 @@ description = "Enables the clear_openai_api_key command without any pre-configur
 commands.allow = ["clear_openai_api_key"]
 
 [[permission]]
+identifier = "allow-set-elevenlabs-api-key"
+description = "Enables the set_elevenlabs_api_key command without any pre-configured scope."
+commands.allow = ["set_elevenlabs_api_key"]
+
+[[permission]]
+identifier = "allow-clear-elevenlabs-api-key"
+description = "Enables the clear_elevenlabs_api_key command without any pre-configured scope."
+commands.allow = ["clear_elevenlabs_api_key"]
+
+[[permission]]
 identifier = "allow-get-model-status"
 description = "Enables the get_model_status command without any pre-configured scope."
 commands.allow = ["get_model_status"]

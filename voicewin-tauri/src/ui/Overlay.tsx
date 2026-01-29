@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
   type SessionStage =
     | 'idle'
     | 'recording'
+    | 'finalizing'
     | 'transcribing'
     | 'enhancing'
     | 'inserting'
@@ -357,8 +358,10 @@ export function Overlay() {
   const pillText = (() => {
     if (status.stage === 'idle') return 'Connecting…';
     if (status.stage === 'recording') return 'Listening...';
+    if (status.stage === 'finalizing') return 'Finalizing...';
     if (status.stage === 'enhancing') return 'Enhancing...';
-    if (status.stage === 'transcribing' || status.stage === 'inserting') return 'Thinking...';
+    if (status.stage === 'transcribing') return 'Transcribing...';
+    if (status.stage === 'inserting') return 'Pasting...';
     if (status.stage === 'success') return 'Inserted';
     if (status.stage === 'cancelled') return 'Cancelled';
     if (status.stage === 'error') return status.error ? status.error : 'Error';
@@ -373,6 +376,11 @@ export function Overlay() {
 
     // Help users verify what we actually inserted.
     if (status.stage === 'success' && status.last_text_preview && status.last_text_preview.trim().length > 0) {
+      return status.last_text_preview;
+    }
+
+    // Realtime STT: show partial transcript while listening.
+    if (status.stage === 'recording' && status.last_text_preview && status.last_text_preview.trim().length > 0) {
       return status.last_text_preview;
     }
 
@@ -392,14 +400,14 @@ export function Overlay() {
   const leftKind = (() => {
     if (status.stage === 'idle') return 'spinner';
     if (status.stage === 'recording') return 'mic';
-    if (status.stage === 'transcribing' || status.stage === 'enhancing' || status.stage === 'inserting') return 'spinner';
+    if (status.stage === 'finalizing' || status.stage === 'transcribing' || status.stage === 'enhancing' || status.stage === 'inserting') return 'spinner';
     if (status.stage === 'success') return 'check';
     if (status.stage === 'error') return 'error';
     return 'none';
   })();
 
   const showStop = status.stage === 'recording';
-  const showCancel = status.stage === 'transcribing' || status.stage === 'enhancing';
+  const showCancel = status.stage === 'finalizing' || status.stage === 'transcribing' || status.stage === 'enhancing';
 
   const needsAccessibility =
     isMac && typeof status.error === 'string' && status.error.toLowerCase().includes('accessibility');

@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 pub struct RunSessionRequest {
     // Reserved for future use (e.g., manual transcript override / debug).
     pub transcript: String,
+
+    // Optional non-fatal warning to attach to the session result (and persist to History).
+    #[serde(default)]
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

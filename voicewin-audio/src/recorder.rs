@@ -264,6 +264,10 @@ impl AudioRecorder {
         })
     }
 
+    pub fn sample_rate_hz(&self) -> u32 {
+        self.sample_rate_hz
+    }
+
     pub fn resample_to_16k(samples: &[f32], input_rate_hz: u32) -> Result<Vec<f32>, AudioCaptureError> {
         Ok(resample_mono_f32(samples, input_rate_hz, 16_000).map_err(AudioCaptureError::Resample)?)
     }
