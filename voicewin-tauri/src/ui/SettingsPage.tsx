@@ -302,7 +302,7 @@ export function SettingsPage() {
                     setElevenKeyError(null);
                     setElevenKeyNotice(null);
                     const { invoke } = await import('@tauri-apps/api/core');
-                    const next = await invoke<ProviderStatus>('set_elevenlabs_api_key', { api_key: elevenApiKeyDraft });
+                    const next = await invoke<ProviderStatus>('set_elevenlabs_api_key', { apiKey: elevenApiKeyDraft });
                     setProviders(next);
                     setElevenApiKeyDraft('');
 
@@ -433,7 +433,7 @@ export function SettingsPage() {
                     setOpenaiKeyError(null);
                     setOpenaiKeyNotice(null);
                     const { invoke } = await import('@tauri-apps/api/core');
-                    const next = await invoke<ProviderStatus>('set_openai_api_key', { api_key: openaiApiKeyDraft });
+                    const next = await invoke<ProviderStatus>('set_openai_api_key', { apiKey: openaiApiKeyDraft });
                     setProviders(next);
                     setOpenaiApiKeyDraft('');
 
