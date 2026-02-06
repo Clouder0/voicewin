@@ -9,6 +9,35 @@ type ModelStatus = {
   preferred_path: string;
 };
 
+type SettingsDraft = {
+  enable_enhancement: boolean;
+  llm_base_url: string;
+  llm_model: string;
+  stt_provider: 'local' | 'elevenlabs';
+  local_stt_model_path: string;
+  elevenlabs_stt_model: 'scribe_v2' | 'scribe_v2_realtime';
+};
+
+function buildConfigFromDraft(cfg: AppConfig, draft: SettingsDraft, modelStatus: ModelStatus | null): AppConfig {
+  return {
+    ...cfg,
+    defaults: {
+      ...cfg.defaults,
+      enable_enhancement: Boolean(draft.enable_enhancement),
+      llm_base_url: draft.llm_base_url.trim() || cfg.defaults.llm_base_url,
+      llm_model: draft.llm_model.trim() || cfg.defaults.llm_model,
+      stt_provider: draft.stt_provider,
+      stt_model:
+        draft.stt_provider === 'local'
+          ? (draft.local_stt_model_path.trim() ||
+              (modelStatus?.preferred_ok
+                ? modelStatus.preferred_path
+                : modelStatus?.bootstrap_path ?? cfg.defaults.stt_model))
+          : draft.elevenlabs_stt_model,
+    },
+  };
+}
+
 function SettingRow({
   title,
   description,
@@ -71,7 +100,7 @@ export function SettingsPage() {
   const [openaiKeyError, setOpenaiKeyError] = useState<string | null>(null);
 
   const [dirty, setDirty] = useState(false);
-  const [draft, setDraft] = useState({
+  const [draft, setDraft] = useState<SettingsDraft>({
     enable_enhancement: false,
     llm_base_url: '',
     llm_model: '',
@@ -103,8 +132,11 @@ export function SettingsPage() {
   }, []);
 
   const saveConfig = useCallback(
-    async (nextCfg: AppConfig): Promise<boolean> => {
-      setSaving(true);
+    async (nextCfg: AppConfig, options?: { manageSaving?: boolean }): Promise<boolean> => {
+      const manageSaving = options?.manageSaving ?? true;
+      if (manageSaving) {
+        setSaving(true);
+      }
       try {
         const { invoke } = await import('@tauri-apps/api/core');
         await invoke('set_config', { cfg: nextCfg });
@@ -117,7 +149,9 @@ export function SettingsPage() {
         setError(String(e));
         return false;
       } finally {
-        setSaving(false);
+        if (manageSaving) {
+          setSaving(false);
+        }
       }
     },
     [refresh],
@@ -170,6 +204,9 @@ export function SettingsPage() {
   const elevenKeyStatusError = useMemo(() => {
     return providers?.elevenlabs_api_key_error ?? null;
   }, [providers]);
+
+  const openaiApiKeyDraftTrimmed = openaiApiKeyDraft.trim();
+  const elevenApiKeyDraftTrimmed = elevenApiKeyDraft.trim();
 
   const baseUrlLooksMissingV1 = useMemo(() => {
     const u = draft.llm_base_url.trim();
@@ -295,20 +332,49 @@ export function SettingsPage() {
               <button
                 type="button"
                 className="vw-button vw-button--secondary"
-                disabled={saving}
+                disabled={saving || elevenApiKeyDraftTrimmed.length === 0}
                 onClick={async () => {
                   try {
                     setSaving(true);
                     setElevenKeyError(null);
                     setElevenKeyNotice(null);
+
+                    if (elevenApiKeyDraftTrimmed.length === 0) {
+                      setElevenKeyError('API key cannot be empty. Use Clear to remove it.');
+                      return;
+                    }
+
                     const { invoke } = await import('@tauri-apps/api/core');
-                    const next = await invoke<ProviderStatus>('set_elevenlabs_api_key', { apiKey: elevenApiKeyDraft });
+                    const next = await invoke<ProviderStatus>('set_elevenlabs_api_key', { apiKey: elevenApiKeyDraftTrimmed });
                     setProviders(next);
+
+                    if (next.elevenlabs_api_key_error) {
+                      setElevenKeyError(`Keyring error: ${next.elevenlabs_api_key_error}`);
+                      return;
+                    }
+                    if (!next.elevenlabs_api_key_present) {
+                      setElevenKeyError('Saved key but it is still not present in the OS keyring.');
+                      return;
+                    }
+
+                    const hadDirty = dirty;
+                    if (hadDirty) {
+                      const nextCfg = buildConfigFromDraft(cfg, draft, modelStatus);
+                      const ok = await saveConfig(nextCfg, { manageSaving: false });
+                      if (ok) {
+                        setDirty(false);
+                        setElevenKeyNotice('Saved key and settings');
+                      } else {
+                        setElevenKeyNotice('Saved key. Fix settings errors, then click Save Changes.');
+                      }
+                    } else {
+                      await refresh();
+                      setElevenKeyNotice('Saved');
+                    }
+
                     setElevenApiKeyDraft('');
 
-                    setElevenKeyNotice('Saved');
                     window.setTimeout(() => setElevenKeyNotice(null), 2000);
-                    await refresh();
                   } catch (e) {
                     const msg = String(e);
                     setError(msg);
@@ -426,15 +492,31 @@ export function SettingsPage() {
               <button
                 type="button"
                 className="vw-button vw-button--secondary"
-                disabled={saving}
+                disabled={saving || openaiApiKeyDraftTrimmed.length === 0}
                 onClick={async () => {
                   try {
                     setSaving(true);
                     setOpenaiKeyError(null);
                     setOpenaiKeyNotice(null);
+
+                    if (openaiApiKeyDraftTrimmed.length === 0) {
+                      setOpenaiKeyError('API key cannot be empty. Use Clear to remove it.');
+                      return;
+                    }
+
                     const { invoke } = await import('@tauri-apps/api/core');
-                    const next = await invoke<ProviderStatus>('set_openai_api_key', { apiKey: openaiApiKeyDraft });
+                    const next = await invoke<ProviderStatus>('set_openai_api_key', { apiKey: openaiApiKeyDraftTrimmed });
                     setProviders(next);
+
+                    if (next.openai_api_key_error) {
+                      setOpenaiKeyError(`Keyring error: ${next.openai_api_key_error}`);
+                      return;
+                    }
+                    if (!next.openai_api_key_present) {
+                      setOpenaiKeyError('Saved key but it is still not present in the OS keyring.');
+                      return;
+                    }
+
                     setOpenaiApiKeyDraft('');
 
                     setOpenaiKeyNotice('Saved');
@@ -612,24 +694,7 @@ export function SettingsPage() {
             className="vw-button vw-button--primary"
             disabled={saving}
             onClick={() => {
-              const nextCfg: AppConfig = {
-                ...cfg,
-                defaults: {
-                  ...cfg.defaults,
-                  enable_enhancement: Boolean(draft.enable_enhancement),
-                  llm_base_url: draft.llm_base_url.trim() || cfg.defaults.llm_base_url,
-                  llm_model: draft.llm_model.trim() || cfg.defaults.llm_model,
-
-                  stt_provider: draft.stt_provider,
-                  stt_model:
-                    draft.stt_provider === 'local'
-                      ? (draft.local_stt_model_path.trim() ||
-                          (modelStatus?.preferred_ok
-                            ? modelStatus.preferred_path
-                            : modelStatus?.bootstrap_path ?? cfg.defaults.stt_model))
-                      : draft.elevenlabs_stt_model,
-                },
-              };
+              const nextCfg = buildConfigFromDraft(cfg, draft, modelStatus);
               void (async () => {
                 const ok = await saveConfig(nextCfg);
                 if (ok) setDirty(false);

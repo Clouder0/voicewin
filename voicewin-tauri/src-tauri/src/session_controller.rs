@@ -564,7 +564,22 @@ impl SessionController {
                     }
 
                     let eleven_key = if wants_realtime {
-                        get_secret(SecretKey::ElevenLabsApiKey).ok().flatten().unwrap_or_default()
+                        match get_secret(SecretKey::ElevenLabsApiKey) {
+                            Ok(Some(v)) => v,
+                            Ok(None) => String::new(),
+                            Err(e) => {
+                                let msg = format!(
+                                    "ElevenLabs is selected but the OS keyring is unavailable. Open Settings -> ElevenLabs. ({e})"
+                                );
+                                controller.mark_error(&app_handle, msg.clone()).await;
+                                return ToggleResult {
+                                    stage: "error".into(),
+                                    final_text: None,
+                                    error: Some(msg),
+                                    is_recording: false,
+                                };
+                            }
+                        }
                     } else {
                         String::new()
                     };

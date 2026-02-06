@@ -706,12 +706,22 @@ async fn set_openai_api_key(
 
     let trimmed = api_key.trim();
     if trimmed.is_empty() {
-        svc.clear_openai_api_key().map_err(|e| e.to_string())?;
-    } else {
-        svc.set_openai_api_key(trimmed).map_err(|e| e.to_string())?;
+        return Err("API key cannot be empty. Use Clear to remove it.".into());
     }
 
-    Ok(provider_status(&svc))
+    svc.set_openai_api_key(trimmed).map_err(|e| e.to_string())?;
+
+    let status = provider_status(&svc);
+    if let Some(e) = &status.openai_api_key_error {
+        return Err(format!(
+            "Saved key but failed to verify keyring state: {e}"
+        ));
+    }
+    if !status.openai_api_key_present {
+        return Err("Saved key but it is still not present in the OS keyring.".into());
+    }
+
+    Ok(status)
 }
 
 #[tauri::command]
@@ -743,13 +753,23 @@ async fn set_elevenlabs_api_key(
 
     let trimmed = api_key.trim();
     if trimmed.is_empty() {
-        svc.clear_elevenlabs_api_key().map_err(|e| e.to_string())?;
-    } else {
-        svc.set_elevenlabs_api_key(trimmed)
-            .map_err(|e| e.to_string())?;
+        return Err("API key cannot be empty. Use Clear to remove it.".into());
     }
 
-    Ok(provider_status(&svc))
+    svc.set_elevenlabs_api_key(trimmed)
+        .map_err(|e| e.to_string())?;
+
+    let status = provider_status(&svc);
+    if let Some(e) = &status.elevenlabs_api_key_error {
+        return Err(format!(
+            "Saved key but failed to verify keyring state: {e}"
+        ));
+    }
+    if !status.elevenlabs_api_key_present {
+        return Err("Saved key but it is still not present in the OS keyring.".into());
+    }
+
+    Ok(status)
 }
 
 #[tauri::command]
