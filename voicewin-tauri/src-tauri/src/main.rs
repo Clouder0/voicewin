@@ -1541,6 +1541,9 @@ fn main() {
             let tray = tray_builder
                 .on_menu_event({
                     let session = session.clone();
+                    // Clone the MenuItem handle before the `move` closure so we can
+                    // keep using `toggle` later (e.g. for the global hotkey handler).
+                    let toggle_for_tray_menu = toggle.clone();
                     move |app, event| match event.id().as_ref() {
                         "show" => {
                             if let Some(w) = app.get_webview_window("main") {
@@ -1555,7 +1558,7 @@ fn main() {
                             let svc_cell = state.service.clone();
 
                             // We update the label by holding onto the MenuItem handle.
-                            let toggle_item = toggle.clone();
+                            let toggle_item = toggle_for_tray_menu.clone();
 
                             tauri::async_runtime::spawn(async move {
                                 let svc = match svc_cell
