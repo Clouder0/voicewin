@@ -44,7 +44,6 @@ fn load_tray_icon(_app: &tauri::AppHandle) -> Option<tauri::image::Image<'static
 use voicewin_appcore::service::AppService;
 use voicewin_core::config::AppConfig;
 
-
 #[derive(Debug, Clone, serde::Serialize)]
 struct DownloadProgress {
     model_id: String,
@@ -68,8 +67,9 @@ struct ModelCatalogEntry {
 }
 
 // In-memory download state so Model Library can reflect "Downloading".
-static DOWNLOADING_MODELS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
-    std::sync::OnceLock::new();
+static DOWNLOADING_MODELS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashSet<String>>,
+> = std::sync::OnceLock::new();
 
 const EVENT_MODEL_DOWNLOAD_PROGRESS: &str = "voicewin://model_download_progress";
 const EVENT_MODEL_DOWNLOAD_DONE: &str = "voicewin://model_download_done";
@@ -149,7 +149,10 @@ fn ensure_bootstrap_model(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
         // If the bundler preserved the `resources/` prefix.
         "resources/models/bootstrap.bin",
     ] {
-        if let Ok(p) = app.path().resolve(rel, tauri::path::BaseDirectory::Resource) {
+        if let Ok(p) = app
+            .path()
+            .resolve(rel, tauri::path::BaseDirectory::Resource)
+        {
             tried.push(p.clone());
             if p.exists() {
                 src = Some(p);
@@ -161,7 +164,10 @@ fn ensure_bootstrap_model(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
     // Extra fallbacks for portable/no-bundle layouts (adjacent to the executable).
     if src.is_none() {
         for rel in ["models/bootstrap.bin", "resources/models/bootstrap.bin"] {
-            if let Ok(p) = app.path().resolve(rel, tauri::path::BaseDirectory::Executable) {
+            if let Ok(p) = app
+                .path()
+                .resolve(rel, tauri::path::BaseDirectory::Executable)
+            {
                 tried.push(p.clone());
                 if p.exists() {
                     src = Some(p);
@@ -178,9 +184,7 @@ fn ensure_bootstrap_model(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
             .map(|p| p.to_string_lossy().to_string())
             .collect::<Vec<_>>()
             .join("; ");
-        anyhow::anyhow!(
-            "could not locate bundled bootstrap model; tried: {tried}"
-        )
+        anyhow::anyhow!("could not locate bundled bootstrap model; tried: {tried}")
     })?;
 
     log::info!("bootstrap model src: {}", src.display());
@@ -289,7 +293,10 @@ fn load_or_init_config(svc: &AppService, app: &tauri::AppHandle) -> Result<AppCo
     }
 }
 
-fn migrate_local_stt_model_path(cfg: &mut AppConfig, app: &tauri::AppHandle) -> Result<bool, String> {
+fn migrate_local_stt_model_path(
+    cfg: &mut AppConfig,
+    app: &tauri::AppHandle,
+) -> Result<bool, String> {
     if cfg.defaults.stt_provider != "local" {
         return Ok(false);
     }
@@ -297,7 +304,8 @@ fn migrate_local_stt_model_path(cfg: &mut AppConfig, app: &tauri::AppHandle) -> 
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
 
     // If the preferred model is present and looks valid, pick it.
-    let preferred = voicewin_runtime::models::installed_preferred_local_stt_model_path(&app_data_dir);
+    let preferred =
+        voicewin_runtime::models::installed_preferred_local_stt_model_path(&app_data_dir);
     if preferred.exists()
         && voicewin_runtime::models::validate_ggml_file(&preferred, 1024 * 1024).is_ok()
     {
@@ -319,8 +327,6 @@ fn migrate_local_stt_model_path(cfg: &mut AppConfig, app: &tauri::AppHandle) -> 
 
     Ok(false)
 }
-
-
 
 fn normalize_model_path_to_models_dir(
     app_data_dir: &std::path::Path,
@@ -381,7 +387,10 @@ fn validate_config(cfg: &AppConfig) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn get_config(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<AppConfig, String> {
+async fn get_config(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<AppConfig, String> {
     let svc = state
         .service
         .get_or_try_init(|| async { build_service(&app).await })
@@ -389,7 +398,7 @@ async fn get_config(state: State<'_, AppState>, app: tauri::AppHandle) -> Result
         .map_err(|e| e.to_string())?;
 
     let mut cfg = load_or_init_config(svc, &app)?;
-    // Reflect current keyring state (not just what's stored on disk).
+    // Reflect current secret-store state (not just what's stored on disk).
     cfg.llm_api_key_present = svc.get_openai_api_key_present().unwrap_or(false);
     Ok(cfg)
 }
@@ -414,7 +423,7 @@ async fn set_config(
         cfg.defaults.stt_model = normalized;
     }
 
-    // Never trust the frontend for secret state; refresh the key-present bit from the keyring.
+    // Never trust the frontend for secret state; refresh the key-present bit from storage.
     cfg.llm_api_key_present = svc.get_openai_api_key_present().unwrap_or(false);
 
     validate_config(&cfg)?;
@@ -430,17 +439,17 @@ struct ForegroundAppInfo {
 }
 
 #[tauri::command]
-async fn capture_foreground_app(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<ForegroundAppInfo, String> {
+async fn capture_foreground_app(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<ForegroundAppInfo, String> {
     let svc = state
         .service
         .get_or_try_init(|| async { build_service(&app).await })
         .await
         .map_err(|e| e.to_string())?;
 
-    let app_id = svc
-        .get_foreground_app()
-        .await
-        .map_err(|e| e.to_string())?;
+    let app_id = svc.get_foreground_app().await.map_err(|e| e.to_string())?;
 
     Ok(ForegroundAppInfo {
         process_name: app_id.process_name.map(|p| p.0),
@@ -616,8 +625,6 @@ async fn set_toggle_hotkey(
     })
 }
 
-
-
 #[tauri::command]
 async fn get_history(
     app: tauri::AppHandle,
@@ -627,7 +634,6 @@ async fn get_history(
     store.load().map_err(|e| e.to_string())
 }
 
-
 #[tauri::command]
 async fn clear_history(app: tauri::AppHandle) -> Result<(), String> {
     let path = default_history_path(&app).map_err(|e| e.to_string())?;
@@ -636,7 +642,11 @@ async fn clear_history(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn delete_history_entry(app: tauri::AppHandle, ts_unix_ms: i64, text: String) -> Result<bool, String> {
+async fn delete_history_entry(
+    app: tauri::AppHandle,
+    ts_unix_ms: i64,
+    text: String,
+) -> Result<bool, String> {
     let path = default_history_path(&app).map_err(|e| e.to_string())?;
     let store = voicewin_runtime::history::HistoryStore::at_path(path);
     store
@@ -666,10 +676,11 @@ fn provider_status(svc: &AppService) -> ProviderStatus {
         Err(e) => (false, Some(e.to_string())),
     };
 
-    let (elevenlabs_api_key_present, elevenlabs_api_key_error) = match svc.get_elevenlabs_api_key_present() {
-        Ok(v) => (v, None),
-        Err(e) => (false, Some(e.to_string())),
-    };
+    let (elevenlabs_api_key_present, elevenlabs_api_key_error) =
+        match svc.get_elevenlabs_api_key_present() {
+            Ok(v) => (v, None),
+            Err(e) => (false, Some(e.to_string())),
+        };
 
     ProviderStatus {
         openai_api_key_present,
@@ -680,7 +691,10 @@ fn provider_status(svc: &AppService) -> ProviderStatus {
 }
 
 #[tauri::command]
-async fn get_provider_status(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<ProviderStatus, String> {
+async fn get_provider_status(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<ProviderStatus, String> {
     let svc = state
         .service
         .get_or_try_init(|| async { build_service(&app).await })
@@ -714,11 +728,11 @@ async fn set_openai_api_key(
     let status = provider_status(&svc);
     if let Some(e) = &status.openai_api_key_error {
         return Err(format!(
-            "Saved key but failed to verify keyring state: {e}"
+            "Saved key but failed to verify secret storage state: {e}"
         ));
     }
     if !status.openai_api_key_present {
-        return Err("Saved key but it is still not present in the OS keyring.".into());
+        return Err("Saved key but it is still not present in secret storage.".into());
     }
 
     Ok(status)
@@ -762,11 +776,11 @@ async fn set_elevenlabs_api_key(
     let status = provider_status(&svc);
     if let Some(e) = &status.elevenlabs_api_key_error {
         return Err(format!(
-            "Saved key but failed to verify keyring state: {e}"
+            "Saved key but failed to verify secret storage state: {e}"
         ));
     }
     if !status.elevenlabs_api_key_present {
-        return Err("Saved key but it is still not present in the OS keyring.".into());
+        return Err("Saved key but it is still not present in secret storage.".into());
     }
 
     Ok(status)
@@ -813,8 +827,6 @@ async fn get_model_status(app: tauri::AppHandle) -> Result<ModelStatus, String> 
     })
 }
 
-
-
 #[tauri::command]
 async fn list_models(
     state: State<'_, AppState>,
@@ -846,10 +858,7 @@ async fn list_models(
                 s = s.replace('/', "\\");
                 let lower = s.to_ascii_lowercase();
                 // Strip Windows verbatim prefix if present.
-                lower
-                    .strip_prefix("\\\\?\\")
-                    .unwrap_or(&lower)
-                    .to_string()
+                lower.strip_prefix("\\\\?\\").unwrap_or(&lower).to_string()
             }
 
             return norm(a) == norm(b);
@@ -866,7 +875,8 @@ async fn list_models(
     // Include the bundled bootstrap model as a selectable entry.
     let bootstrap_path = voicewin_runtime::models::installed_bootstrap_model_path(&app_data_dir);
     let bootstrap_size = std::fs::metadata(&bootstrap_path).map(|m| m.len()).ok();
-    let bootstrap_installed = voicewin_runtime::models::validate_ggml_file(&bootstrap_path, 1024 * 1024).is_ok();
+    let bootstrap_installed =
+        voicewin_runtime::models::validate_ggml_file(&bootstrap_path, 1024 * 1024).is_ok();
     let bootstrap_active = paths_equivalent(&active_path, &bootstrap_path);
     out.push(ModelCatalogEntry {
         id: BUNDLED_TINY_MODEL_ID.into(),
@@ -957,12 +967,13 @@ async fn set_active_model(
 async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<(), String> {
     // NOTE: this uses network access (HuggingFace).
     log::info!("download_model start: {model_id}");
-    let downloading = DOWNLOADING_MODELS.get_or_init(|| {
-        std::sync::Mutex::new(std::collections::HashSet::new())
-    });
+    let downloading =
+        DOWNLOADING_MODELS.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
 
     {
-        let mut guard = downloading.lock().map_err(|_| "download lock poisoned".to_string())?;
+        let mut guard = downloading
+            .lock()
+            .map_err(|_| "download lock poisoned".to_string())?;
         if guard.contains(&model_id) {
             return Err("model is already downloading".into());
         }
@@ -1173,13 +1184,18 @@ async fn overlay_set_size(app: tauri::AppHandle, width: f64, height: f64) -> Res
             if let Ok(Some(monitor)) = w.current_monitor().or_else(|_| w.primary_monitor()) {
                 let work = monitor.work_area();
                 if let Ok(size) = w.outer_size() {
-                    let x = work.position.x + (work.size.width as i32 / 2) - (size.width as i32 / 2);
+                    let x =
+                        work.position.x + (work.size.width as i32 / 2) - (size.width as i32 / 2);
 
                     // Place the pill so its bottom is 80px above the monitor bottom.
                     // (We align the window bottom accordingly; the webview itself includes shadow padding.)
-                    let y = work.position.y + work.size.height as i32 - OVERLAY_BOTTOM_OFFSET - (size.height as i32);
+                    let y = work.position.y + work.size.height as i32
+                        - OVERLAY_BOTTOM_OFFSET
+                        - (size.height as i32);
 
-                    let _ = w.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(x, y)));
+                    let _ = w.set_position(tauri::Position::Physical(
+                        tauri::PhysicalPosition::new(x, y),
+                    ));
                 }
             }
         }
@@ -1218,7 +1234,10 @@ async fn open_macos_accessibility_settings() -> Result<(), String> {
     use std::process::Command;
 
     let url = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
-    let status = Command::new("open").arg(url).status().map_err(|e| e.to_string())?;
+    let status = Command::new("open")
+        .arg(url)
+        .status()
+        .map_err(|e| e.to_string())?;
     if status.success() {
         Ok(())
     } else {
@@ -1232,7 +1251,10 @@ async fn open_macos_microphone_settings() -> Result<(), String> {
     use std::process::Command;
 
     let url = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone";
-    let status = Command::new("open").arg(url).status().map_err(|e| e.to_string())?;
+    let status = Command::new("open")
+        .arg(url)
+        .status()
+        .map_err(|e| e.to_string())?;
     if status.success() {
         Ok(())
     } else {
@@ -1304,7 +1326,6 @@ fn main() {
             get_toggle_hotkey,
             #[cfg(any(windows, target_os = "macos"))]
             set_toggle_hotkey,
-
             get_history,
             clear_history,
             delete_history_entry,
@@ -1326,7 +1347,6 @@ fn main() {
             overlay_ready,
             overlay_dismiss,
             show_main_window,
-
             #[cfg(target_os = "macos")]
             open_macos_accessibility_settings,
             #[cfg(target_os = "macos")]
@@ -1365,7 +1385,6 @@ fn main() {
                     let _ = apply_tabbed(&main_w, None);
                 }
             }
-
 
             // IMPORTANT: do not set the overlay window as click-through by default.
             // The HUD contains interactive controls (Stop/Cancel/History/Dismiss) and must
@@ -1447,7 +1466,9 @@ fn main() {
                         return;
                     }
 
-                    let WindowEvent::Moved(pos) = event else { return; };
+                    let WindowEvent::Moved(pos) = event else {
+                        return;
+                    };
 
                     if let Some(store) = store_for_events.as_ref() {
                         let payload = OverlayMovedPayload { x: pos.x, y: pos.y };
@@ -1568,23 +1589,19 @@ fn main() {
                             if let Ok(dir) = app.path().app_log_dir() {
                                 #[cfg(windows)]
                                 {
-                                    let _ = std::process::Command::new("explorer")
-                                        .arg(dir)
-                                        .status();
+                                    let _ =
+                                        std::process::Command::new("explorer").arg(dir).status();
                                 }
 
                                 #[cfg(target_os = "macos")]
                                 {
-                                    let _ = std::process::Command::new("open")
-                                        .arg(dir)
-                                        .status();
+                                    let _ = std::process::Command::new("open").arg(dir).status();
                                 }
 
                                 #[cfg(all(not(windows), not(target_os = "macos")))]
                                 {
-                                    let _ = std::process::Command::new("xdg-open")
-                                        .arg(dir)
-                                        .status();
+                                    let _ =
+                                        std::process::Command::new("xdg-open").arg(dir).status();
                                 }
                             }
 
@@ -1593,9 +1610,7 @@ fn main() {
                             {
                                 let p = std::env::temp_dir().join("voicewin_panic.log");
                                 if p.exists() {
-                                    let _ = std::process::Command::new("explorer")
-                                        .arg(p)
-                                        .status();
+                                    let _ = std::process::Command::new("explorer").arg(p).status();
                                 }
                             }
                         }
@@ -1613,14 +1628,12 @@ fn main() {
                                     let work = monitor.work_area();
 
                                     if let Ok(size) = overlay.outer_size() {
-                                        let x = work.position.x
-                                            + (work.size.width as i32 / 2)
+                                        let x = work.position.x + (work.size.width as i32 / 2)
                                             - (size.width as i32 / 2);
 
                                         // Align the overlay window bottom so the pill appears ~80px above the
                                         // monitor bottom (the window itself includes shadow padding).
-                                        let y = work.position.y
-                                            + work.size.height as i32
+                                        let y = work.position.y + work.size.height as i32
                                             - OVERLAY_BOTTOM_OFFSET
                                             - (size.height as i32);
 

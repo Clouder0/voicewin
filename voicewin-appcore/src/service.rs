@@ -36,9 +36,10 @@ pub fn user_facing_audio_error(e: &voicewin_audio::AudioCaptureError) -> String 
     "Audio recording failed. See History for recovery and check logs for details.".into()
 }
 
-
 use voicewin_runtime::runtime_engine::build_engine_from_config;
-use voicewin_runtime::secrets::{SecretKey, delete_secret, get_secret, set_secret};
+use voicewin_runtime::secrets::{
+    SecretKey, configure_secret_store_path, delete_secret, get_secret, set_secret,
+};
 
 #[derive(Clone)]
 pub struct AppService {
@@ -56,6 +57,12 @@ impl AppService {
         ctx: Arc<dyn AppContextProvider>,
         inserter: Arc<dyn Inserter>,
     ) -> Self {
+        let secrets_path = config_path
+            .parent()
+            .map(|p| p.join("secrets.json"))
+            .unwrap_or_else(|| PathBuf::from("secrets.json"));
+        configure_secret_store_path(secrets_path);
+
         Self {
             config_store: ConfigStore::at_path(config_path),
             ctx,
@@ -188,7 +195,8 @@ impl AppService {
         req: RunSessionRequest,
         audio: AudioInput,
     ) -> anyhow::Result<RunSessionResponse> {
-        self.run_session_with_hook(req, audio, |_stage| async {}).await
+        self.run_session_with_hook(req, audio, |_stage| async {})
+            .await
     }
 
     pub async fn run_session_with_hook<F, Fut>(
@@ -204,7 +212,10 @@ impl AppService {
         let cfg = self.config_store.load()?;
 
         // Split request fields so we can move transcript into the engine call.
-        let RunSessionRequest { transcript, warning } = req;
+        let RunSessionRequest {
+            transcript,
+            warning,
+        } = req;
 
         // Design-draft UI treats History as always enabled.
         // Keep the config flag for backward compatibility, but it must not disable history.
@@ -240,9 +251,7 @@ impl AppService {
         // Attach any extra warning requested by the caller.
         if let Some(w) = warning.as_ref().filter(|s| !s.trim().is_empty()) {
             error = match error {
-                Some(existing) if !existing.trim().is_empty() => {
-                    Some(format!("{existing} | {w}"))
-                }
+                Some(existing) if !existing.trim().is_empty() => Some(format!("{existing} | {w}")),
                 _ => Some(w.to_string()),
             };
         }
@@ -303,7 +312,6 @@ impl AppService {
             error,
         })
     }
-
 }
 
 #[cfg(test)]

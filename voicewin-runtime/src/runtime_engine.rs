@@ -18,7 +18,7 @@ pub async fn build_engine_from_config(
     ctx: Arc<dyn AppContextProvider>,
     inserter: Arc<dyn Inserter>,
 ) -> anyhow::Result<VoicewinEngine> {
-    // Secrets (OS keyring)
+    // Secrets (app-managed secret store)
     let llm_api_key = get_secret(SecretKey::OpenAiCompatibleApiKey)?.unwrap_or_default();
     let eleven_key = get_secret(SecretKey::ElevenLabsApiKey)?.unwrap_or_default();
 

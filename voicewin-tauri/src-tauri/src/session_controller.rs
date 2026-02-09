@@ -1,8 +1,8 @@
 use std::sync::Arc;
 #[cfg(any(windows, target_os = "macos"))]
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-#[cfg(any(windows, target_os = "macos"))]
 use std::sync::Mutex as StdMutex;
+#[cfg(any(windows, target_os = "macos"))]
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use tauri::{Emitter, Manager};
@@ -315,7 +315,8 @@ impl SessionController {
 
         let should_hide = {
             let inner = self.inner.lock().await;
-            inner.session_id == session_id && matches!(inner.stage, SessionStage::Success | SessionStage::Cancelled)
+            inner.session_id == session_id
+                && matches!(inner.stage, SessionStage::Success | SessionStage::Cancelled)
         };
 
         if should_hide {
@@ -499,7 +500,10 @@ impl SessionController {
         let stage = { self.inner.lock().await.stage };
 
         match stage {
-            SessionStage::Idle | SessionStage::Error | SessionStage::Cancelled | SessionStage::Success => {
+            SessionStage::Idle
+            | SessionStage::Error
+            | SessionStage::Cancelled
+            | SessionStage::Success => {
                 // Show first so the overlay doesn't miss the stage update.
                 Self::show_overlay(app);
                 self.set_stage(app, SessionStage::Recording).await;
@@ -569,7 +573,7 @@ impl SessionController {
                             Ok(None) => String::new(),
                             Err(e) => {
                                 let msg = format!(
-                                    "ElevenLabs is selected but the OS keyring is unavailable. Open Settings -> ElevenLabs. ({e})"
+                                    "ElevenLabs is selected but secret storage is unavailable. Open Settings -> ElevenLabs. ({e})"
                                 );
                                 controller.mark_error(&app_handle, msg.clone()).await;
                                 return ToggleResult {
@@ -644,16 +648,8 @@ impl SessionController {
                                 guard.last_emit = now;
 
                                 let (rms, peak) = compute_levels(chunk);
-                                guard.smoothed_rms = smooth_level(
-                                    guard.smoothed_rms,
-                                    rms,
-                                    dt,
-                                );
-                                guard.smoothed_peak = smooth_level(
-                                    guard.smoothed_peak,
-                                    peak,
-                                    dt,
-                                );
+                                guard.smoothed_rms = smooth_level(guard.smoothed_rms, rms, dt);
+                                guard.smoothed_peak = smooth_level(guard.smoothed_peak, peak, dt);
 
                                 let (rms_out, peak_out) = (guard.smoothed_rms, guard.smoothed_peak);
                                 drop(guard);
@@ -686,12 +682,10 @@ impl SessionController {
                     // Start ElevenLabs realtime session after the recorder is opened, so we can
                     // determine the device sample rate.
                     if wants_realtime {
-                        let sr = svc
-                            .recording_sample_rate_hz()
-                            .await
-                            .unwrap_or(16_000);
+                        let sr = svc.recording_sample_rate_hz().await.unwrap_or(16_000);
 
-                        let mut rt_cfg = match ElevenLabsRealtimeConfig::production(eleven_key, sr) {
+                        let mut rt_cfg = match ElevenLabsRealtimeConfig::production(eleven_key, sr)
+                        {
                             Ok(c) => c,
                             Err(e) => {
                                 log::warn!("elevenlabs realtime disabled: {e}");
@@ -723,7 +717,8 @@ impl SessionController {
                             Ok((handle, mut events)) => {
                                 let last_error = Arc::new(StdMutex::new(None));
                                 let last_warning = Arc::new(StdMutex::new(None));
-                                let session_id_for_realtime = { controller.inner.lock().await.session_id };
+                                let session_id_for_realtime =
+                                    { controller.inner.lock().await.session_id };
 
                                 // Sender task: convert f32 -> PCM16 and stream to WS.
                                 let handle_for_sender = handle.clone();
@@ -736,7 +731,8 @@ impl SessionController {
                                         let pcm = pcm_s16le_from_f32(&chunk);
                                         if !handle_for_sender.send_audio_chunk(pcm).await {
                                             // Realtime session died; disable streaming so the audio callback stops enqueueing.
-                                            streaming_enabled_for_sender.store(false, Ordering::Relaxed);
+                                            streaming_enabled_for_sender
+                                                .store(false, Ordering::Relaxed);
                                             break;
                                         }
                                     }
@@ -752,7 +748,9 @@ impl SessionController {
                                     let mut last_emit = Instant::now();
                                     while let Some(evt) = events.recv().await {
                                         // Don't let stale realtime updates leak into a cancelled/new session.
-                                        if receiver_controller.inner.lock().await.session_id != session_id_for_realtime {
+                                        if receiver_controller.inner.lock().await.session_id
+                                            != session_id_for_realtime
+                                        {
                                             break;
                                         }
 
@@ -769,16 +767,21 @@ impl SessionController {
                                                     format!("{c} {p}")
                                                 };
                                                 // Throttle UI updates a bit.
-                                                if last_emit.elapsed() < Duration::from_millis(200) {
+                                                if last_emit.elapsed() < Duration::from_millis(200)
+                                                {
                                                     continue;
                                                 }
                                                 last_emit = Instant::now();
                                                 receiver_controller.set_last_text(Some(live)).await;
-                                                receiver_controller.emit_status(&receiver_app).await;
+                                                receiver_controller
+                                                    .emit_status(&receiver_app)
+                                                    .await;
                                             }
                                             RealtimeEvent::Warning { kind: _, message } => {
                                                 // Persist the latest warning so stop-time History can reflect it.
-                                                if let Ok(mut guard) = last_warning_for_receiver.lock() {
+                                                if let Ok(mut guard) =
+                                                    last_warning_for_receiver.lock()
+                                                {
                                                     *guard = Some(message.clone());
                                                 }
                                                 receiver_controller
@@ -789,13 +792,20 @@ impl SessionController {
                                                     )
                                                     .await;
                                             }
-                                            RealtimeEvent::Error { message_type, error } => {
+                                            RealtimeEvent::Error {
+                                                message_type,
+                                                error,
+                                            } => {
                                                 // Stop feeding realtime immediately; we'll fall back to batch on stop.
-                                                streaming_enabled_for_receiver.store(false, Ordering::Relaxed);
+                                                streaming_enabled_for_receiver
+                                                    .store(false, Ordering::Relaxed);
 
                                                 // Store a concise detail for stop-time warnings.
-                                                if let Ok(mut guard) = last_error_for_receiver.lock() {
-                                                    *guard = Some(format!("{message_type}: {error}"));
+                                                if let Ok(mut guard) =
+                                                    last_error_for_receiver.lock()
+                                                {
+                                                    *guard =
+                                                        Some(format!("{message_type}: {error}"));
                                                 }
 
                                                 receiver_controller
@@ -828,7 +838,9 @@ impl SessionController {
                                 }
                             }
                             Err(e) => {
-                                log::warn!("failed to start ElevenLabs realtime; will fall back to batch on stop: {e}");
+                                log::warn!(
+                                    "failed to start ElevenLabs realtime; will fall back to batch on stop: {e}"
+                                );
                                 streaming_enabled.store(false, Ordering::Relaxed);
                                 controller
                                     .set_status_message(
@@ -940,7 +952,11 @@ impl SessionController {
                                 );
                                 merge_warning(&mut warning, msg.clone());
                                 controller
-                                    .set_status_message(&app_handle, msg, Duration::from_millis(2500))
+                                    .set_status_message(
+                                        &app_handle,
+                                        msg,
+                                        Duration::from_millis(2500),
+                                    )
                                     .await;
                             }
 
@@ -953,7 +969,9 @@ impl SessionController {
 
                             match rt.handle.finalize().await {
                                 Ok(t) => {
-                                    if let Some(t) = voicewin_core::stt::accept_transcript_override(t) {
+                                    if let Some(t) =
+                                        voicewin_core::stt::accept_transcript_override(t)
+                                    {
                                         transcript_override = t;
                                     } else {
                                         let msg = "ElevenLabs realtime produced no text; using batch on stop.".to_string();
@@ -1014,16 +1032,24 @@ impl SessionController {
                                                 } else {
                                                     SessionStage::Transcribing
                                                 };
-                                                controller_for_hook.set_stage(&app_for_hook, s).await;
+                                                controller_for_hook
+                                                    .set_stage(&app_for_hook, s)
+                                                    .await;
                                             }
                                             "enhancing" => {
                                                 controller_for_hook
-                                                    .set_stage(&app_for_hook, SessionStage::Enhancing)
+                                                    .set_stage(
+                                                        &app_for_hook,
+                                                        SessionStage::Enhancing,
+                                                    )
                                                     .await;
                                             }
                                             "inserting" => {
                                                 controller_for_hook
-                                                    .set_stage(&app_for_hook, SessionStage::Inserting)
+                                                    .set_stage(
+                                                        &app_for_hook,
+                                                        SessionStage::Inserting,
+                                                    )
                                                     .await;
                                             }
                                             _ => {}
@@ -1054,7 +1080,9 @@ impl SessionController {
 
                                 if r.stage == "done" {
                                     // If we have a non-fatal warning (e.g. enhancement failed), show it briefly.
-                                    let delay = if let Some(msg) = r.error.as_ref().filter(|s| !s.trim().is_empty()) {
+                                    let delay = if let Some(msg) =
+                                        r.error.as_ref().filter(|s| !s.trim().is_empty())
+                                    {
                                         controller
                                             .set_status_message(
                                                 &app_handle,
@@ -1067,7 +1095,9 @@ impl SessionController {
                                         Self::OVERLAY_HIDE_DELAY
                                     };
 
-                                    controller.set_stage(&app_handle, SessionStage::Success).await;
+                                    controller
+                                        .set_stage(&app_handle, SessionStage::Success)
+                                        .await;
 
                                     // After entering Recording, the session id was incremented in `set_stage`.
                                     let session_id = { controller.inner.lock().await.session_id };
@@ -1089,10 +1119,9 @@ impl SessionController {
 
                                     // Preserve the underlying error string so the overlay can provide
                                     // actionable shortcuts (e.g. Accessibility settings on macOS).
-                                    let msg = r
-                                        .error
-                                        .clone()
-                                        .unwrap_or_else(|| "Could not insert. Saved to History.".into());
+                                    let msg = r.error.clone().unwrap_or_else(|| {
+                                        "Could not insert. Saved to History.".into()
+                                    });
 
                                     log::error!("session failed stage=failed: {msg}");
                                     controller

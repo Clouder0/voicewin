@@ -87,7 +87,7 @@ describe('SettingsPage ElevenLabs key save', () => {
     const saveButton = within(controls as HTMLElement).getByRole('button', { name: 'Save' });
     await user.click(saveButton);
 
-    expect(await screen.findByText('Saved key but it is still not present in the OS keyring.')).toBeInTheDocument();
+    expect(await screen.findByText('Saved key but it is still not present in secret storage.')).toBeInTheDocument();
     expect(screen.queryByText(/^Saved$/)).not.toBeInTheDocument();
     expect(invokeMock).toHaveBeenCalledWith('set_elevenlabs_api_key', { apiKey: 'xi_test_123' });
   });

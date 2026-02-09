@@ -386,7 +386,7 @@ Minimum requirement:
 - Support OpenAI-compatible endpoints via configurable base URL and model.
 
 Requirements:
-- API key management via secure storage.
+- API key management via app-managed secret storage.
 - Test connectivity.
 - Show last error (rate limits, auth, timeouts) in a user-readable way.
 
@@ -475,7 +475,7 @@ Requirements:
   - cloud STT provider selection,
   - cloud LLM provider selection,
   - explicit disclosure of what is sent and when.
-- Secrets must be stored in OS secure storage.
+- Secrets must be stored in app-managed secret storage.
 - Diagnostics exports must redact secrets.
 
 ## 11) Non-Functional Requirements (UX-impacting)

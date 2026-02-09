@@ -313,7 +313,7 @@ export function SettingsPage() {
 
       <Section
         title="ElevenLabs"
-        subtitle="Required only when ElevenLabs STT is selected. The key is stored in the OS keyring (not in config.json)."
+        subtitle="Required only when ElevenLabs STT is selected. The key is stored in VoiceWin secret storage (not in config.json)."
       >
         <SettingRow
           title="API key"
@@ -349,11 +349,11 @@ export function SettingsPage() {
                     setProviders(next);
 
                     if (next.elevenlabs_api_key_error) {
-                      setElevenKeyError(`Keyring error: ${next.elevenlabs_api_key_error}`);
+                      setElevenKeyError(`Secret storage error: ${next.elevenlabs_api_key_error}`);
                       return;
                     }
                     if (!next.elevenlabs_api_key_present) {
-                      setElevenKeyError('Saved key but it is still not present in the OS keyring.');
+                      setElevenKeyError('Saved key but it is still not present in secret storage.');
                       return;
                     }
 
@@ -420,7 +420,7 @@ export function SettingsPage() {
 
         {elevenKeyStatusError ? (
           <div className="vw-type-caption" style={{ padding: 'var(--space-12)', color: 'var(--color-danger-fg)' }}>
-            Keyring error: {elevenKeyStatusError}
+            Secret storage error: {elevenKeyStatusError}
           </div>
         ) : null}
         {elevenKeyError ? (
@@ -436,7 +436,7 @@ export function SettingsPage() {
 
         {draft.stt_provider === 'elevenlabs' && providers?.elevenlabs_api_key_error ? (
           <div className="vw-type-caption" style={{ padding: 'var(--space-12)', color: 'var(--color-danger-fg)' }}>
-            ElevenLabs is selected but the OS keyring is unavailable. Recording will fail until this is resolved.
+            ElevenLabs is selected but secret storage is unavailable. Recording will fail until this is resolved.
           </div>
         ) : null}
 
@@ -473,11 +473,11 @@ export function SettingsPage() {
 
       <Section
         title="OpenAI-Compatible"
-        subtitle="Configure the endpoint used for enhancement (base URL + model) and store your API key in the OS keyring."
+        subtitle="Configure the endpoint used for enhancement (base URL + model) and store your API key in VoiceWin secret storage."
       >
         <SettingRow
           title="API key"
-          description={`Status: ${openaiKeyStatus}. The key is stored in the OS keyring (not in config.json).`}
+          description={`Status: ${openaiKeyStatus}. The key is stored in VoiceWin secret storage (not in config.json).`}
           right={
             <>
               <input
@@ -509,11 +509,11 @@ export function SettingsPage() {
                     setProviders(next);
 
                     if (next.openai_api_key_error) {
-                      setOpenaiKeyError(`Keyring error: ${next.openai_api_key_error}`);
+                      setOpenaiKeyError(`Secret storage error: ${next.openai_api_key_error}`);
                       return;
                     }
                     if (!next.openai_api_key_present) {
-                      setOpenaiKeyError('Saved key but it is still not present in the OS keyring.');
+                      setOpenaiKeyError('Saved key but it is still not present in secret storage.');
                       return;
                     }
 
@@ -567,7 +567,7 @@ export function SettingsPage() {
 
         {openaiKeyStatusError ? (
           <div className="vw-type-caption" style={{ padding: 'var(--space-12)', color: 'var(--color-danger-fg)' }}>
-            Keyring error: {openaiKeyStatusError}
+            Secret storage error: {openaiKeyStatusError}
           </div>
         ) : null}
         {openaiKeyError ? (
