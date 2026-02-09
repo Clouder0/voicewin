@@ -763,6 +763,10 @@ impl SessionController {
                     if wants_realtime {
                         let sr = svc.recording_sample_rate_hz().await.unwrap_or(16_000);
 
+                        log::info!(
+                            "ElevenLabs realtime requested; starting WS session (sample_rate_hz={sr})"
+                        );
+
                         let mut rt_cfg = match ElevenLabsRealtimeConfig::production(eleven_key, sr)
                         {
                             Ok(c) => c,
@@ -792,8 +796,16 @@ impl SessionController {
                             other => Some(other.to_string()),
                         };
 
+                        log::info!(
+                            "ElevenLabs realtime config: commit_strategy={:?} language_code={:?}",
+                            rt_cfg.commit_strategy,
+                            rt_cfg.language_code
+                        );
+
                         match spawn_realtime_session(rt_cfg).await {
                             Ok((handle, mut events)) => {
+                                log::info!("ElevenLabs realtime WS session started");
+
                                 let last_error = Arc::new(StdMutex::new(None));
                                 let last_warning = Arc::new(StdMutex::new(None));
                                 let session_id_for_realtime =
@@ -920,12 +932,16 @@ impl SessionController {
                                 log::warn!(
                                     "failed to start ElevenLabs realtime; will fall back to batch on stop: {e}"
                                 );
+                                // Some log viewers filter to INFO only; duplicate the key detail.
+                                log::info!(
+                                    "ElevenLabs realtime start failed; using batch on stop: {e}"
+                                );
                                 streaming_enabled.store(false, Ordering::Relaxed);
                                 controller
                                     .set_status_message(
                                         &app_handle,
                                         format!("ElevenLabs realtime unavailable; will use batch on stop. ({e})"),
-                                        Duration::from_millis(2500),
+                                        Duration::from_secs(6),
                                     )
                                     .await;
                             }
