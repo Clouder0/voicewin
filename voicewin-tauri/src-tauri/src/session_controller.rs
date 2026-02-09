@@ -599,22 +599,51 @@ impl SessionController {
                     // NOTE: Use effective config so Power Mode profiles can enable realtime.
                     let mut wants_realtime = false;
                     let mut effective_language: Option<String> = None;
-                    if let Ok(cfg) = svc.load_config() {
-                        let app_id = svc
-                            .get_foreground_app()
-                            .await
-                            .unwrap_or_else(|_| voicewin_core::types::AppIdentity::new());
-                        let eff = voicewin_core::power_mode::resolve_effective_config(
-                            &cfg.defaults,
-                            &cfg.profiles,
-                            &app_id,
-                            &voicewin_core::power_mode::EphemeralOverrides::default(),
-                        );
-                        wants_realtime = voicewin_core::stt::is_elevenlabs_realtime_selected(
-                            &eff.stt_provider,
-                            &eff.stt_model,
-                        );
-                        effective_language = Some(eff.language);
+
+                    // IMPORTANT: if config loading fails here, we silently fall back to batch STT.
+                    // Emit a warning + HUD notice so users can diagnose why realtime isn't active.
+                    match svc.load_config() {
+                        Ok(cfg) => {
+                            let app_id = svc
+                                .get_foreground_app()
+                                .await
+                                .unwrap_or_else(|_| voicewin_core::types::AppIdentity::new());
+                            let eff = voicewin_core::power_mode::resolve_effective_config(
+                                &cfg.defaults,
+                                &cfg.profiles,
+                                &app_id,
+                                &voicewin_core::power_mode::EphemeralOverrides::default(),
+                            );
+
+                            wants_realtime = voicewin_core::stt::is_elevenlabs_realtime_selected(
+                                &eff.stt_provider,
+                                &eff.stt_model,
+                            );
+                            effective_language = Some(eff.language.clone());
+
+                            log::info!(
+                                "effective STT on recording start: provider={:?} model={:?} language={:?} profile={:?} wants_realtime={}",
+                                eff.stt_provider,
+                                eff.stt_model,
+                                eff.language,
+                                eff.matched_profile_name,
+                                wants_realtime
+                            );
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "load_config failed while starting recording; realtime STT disabled for this session (will use batch on stop): {e}"
+                            );
+                            controller
+                                .set_status_message(
+                                    &app_handle,
+                                    format!(
+                                        "Could not read config; realtime STT disabled (batch on stop). ({e})"
+                                    ),
+                                    Duration::from_millis(2500),
+                                )
+                                .await;
+                        }
                     }
 
                     let eleven_key = if wants_realtime {
