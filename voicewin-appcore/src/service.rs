@@ -273,6 +273,7 @@ impl AppService {
                 let app = self.ctx.foreground_app().await.ok();
 
                 let entry = voicewin_runtime::history::HistoryEntry {
+                    id: String::new(),
                     ts_unix_ms: ts,
                     app_process_name: app
                         .as_ref()

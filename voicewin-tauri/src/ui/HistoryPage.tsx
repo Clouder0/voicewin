@@ -83,13 +83,14 @@ export function HistoryPage() {
           </div>
         </div>
 
-        {rows.map((r) => {
+        {rows.map((r, idx) => {
           const app = r.app_process_name ?? '—';
           const text = r.text && r.text.trim().length > 0 ? r.text : (r.error ?? '');
+          const rowId = r.id && r.id.trim().length > 0 ? r.id : null;
 
           return (
             <div
-              key={`${r.ts_unix_ms}-${text}`}
+              key={rowId ?? `${r.ts_unix_ms}-${r.text}-${idx}`}
               className="vw-historyRow"
               style={{
                 height: 56,
@@ -134,7 +135,11 @@ export function HistoryPage() {
                   onClick={async () => {
                     try {
                       const { invoke } = await import('@tauri-apps/api/core');
-                      await invoke('delete_history_entry', { tsUnixMs: r.ts_unix_ms, text });
+                      if (rowId) {
+                        await invoke('delete_history_entry_by_id', { id: rowId });
+                      } else {
+                        await invoke('delete_history_entry', { tsUnixMs: r.ts_unix_ms, text: r.text });
+                      }
                       await refresh();
                     } catch (e) {
                       setError(String(e));

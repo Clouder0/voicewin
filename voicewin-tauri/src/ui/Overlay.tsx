@@ -234,6 +234,8 @@ export function Overlay() {
   const isVisible =
     (status.stage !== 'idle' && status.stage !== 'done') || idleFallback;
 
+  const resizeContentKey = `${status.stage}|${status.last_text_preview ?? ''}|${status.error ?? ''}`;
+
   const [isExiting, setIsExiting] = useState(false);
 
 
@@ -276,9 +278,10 @@ export function Overlay() {
   }, [isExiting, status.stage]);
 
   // Fit-content sizing: measure pill and ask backend to resize the overlay window.
-  // We trigger this when the stage changes (content width changes across states).
+  // Re-run when stage/text changes so preview growth cannot clip the layout.
   useEffect(() => {
-    const visible = isVisible && status.stage !== 'done';
+    void resizeContentKey;
+    const visible = isVisible;
     if (!visible) return;
 
     let raf = 0;
@@ -295,11 +298,11 @@ export function Overlay() {
         const minW = 160;
         const maxW = 600;
 
-        // Add a small safety margin for box-shadow.
-        const shadowPad = 24;
+        // Add safety margins for box-shadow (roughly 16px each side).
+        const shadowPad = 32;
 
         const width = Math.max(minW, Math.min(maxW, Math.ceil(rect.width) + shadowPad));
-        const height = 48 + shadowPad;
+        const height = Math.ceil(rect.height) + shadowPad;
 
         // Rust expects f64 values for logical sizing.
         const widthF = Number(width);
@@ -322,7 +325,7 @@ export function Overlay() {
       stop = true;
       if (raf) window.cancelAnimationFrame(raf);
     };
-  }, [isVisible, status.stage]);
+  }, [isVisible, resizeContentKey]);
 
   const meter = useMemo(() => {
     // Spec: 5 bars, height 4px..24px during recording.
@@ -407,7 +410,8 @@ export function Overlay() {
   })();
 
   const showStop = status.stage === 'recording';
-  const showCancel = status.stage === 'finalizing' || status.stage === 'transcribing' || status.stage === 'enhancing';
+  const showCancel = status.stage === 'finalizing' || status.stage === 'transcribing' || status.stage === 'enhancing' || status.stage === 'inserting';
+  const showDismiss = !showStop && !showCancel;
 
   const needsAccessibility =
     isMac && typeof status.error === 'string' && status.error.toLowerCase().includes('accessibility');
@@ -441,21 +445,23 @@ export function Overlay() {
                 </div>
               ) : null}
 
-              <div
-                className={
-                  status.stage === 'recording' || status.stage === 'success'
-                    ? 'vw-type-bodyStrong'
-                    : 'vw-type-body'
-                }
-              >
-                {pillText}
-              </div>
-
-              {subtitle ? (
-                <div className="vw-type-caption" style={{ marginTop: 2, color: 'var(--text-secondary)' }}>
-                  {subtitle}
+              <div className="vw-hudText">
+                <div
+                  className={
+                    status.stage === 'recording' || status.stage === 'success'
+                      ? 'vw-type-bodyStrong vw-hudTitle'
+                      : 'vw-type-body vw-hudTitle'
+                  }
+                >
+                  {pillText}
                 </div>
-              ) : null}
+
+                {subtitle ? (
+                  <div className="vw-type-caption vw-hudSubtitle">
+                    {subtitle}
+                  </div>
+                ) : null}
+              </div>
             </div>
 
           <div className="vw-hudRight">
@@ -561,22 +567,24 @@ export function Overlay() {
               </div>
             ) : null}
 
-            {/* Always provide a dismiss button so a broken overlay can't trap the user. */}
-            <button
-              type="button"
-              className="vw-button vw-button--ghost vw-iconButton"
-              aria-label="Dismiss"
-              onClick={async () => {
-                try {
-                  const { invoke } = await import('@tauri-apps/api/core');
-                  await invoke('overlay_dismiss');
-                } catch {
-                  // Ignore.
-                }
-              }}
-            >
-              ✕
-            </button>
+            {showDismiss ? (
+              // Always provide a dismiss button for non-active stages so a broken overlay can't trap the user.
+              <button
+                type="button"
+                className="vw-button vw-button--ghost vw-iconButton"
+                aria-label="Dismiss"
+                onClick={async () => {
+                  try {
+                    const { invoke } = await import('@tauri-apps/api/core');
+                    await invoke('overlay_dismiss');
+                  } catch {
+                    // Ignore.
+                  }
+                }}
+              >
+                ✕
+              </button>
+            ) : null}
           </div>
         </div>
       ) : null}

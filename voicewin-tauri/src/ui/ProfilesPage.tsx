@@ -33,16 +33,18 @@ export function ProfilesPage() {
       setCfg(c);
       const decoded = c.profiles.map(decodePowerModeProfile);
       setProfiles(decoded);
-      if (decoded.length > 0 && !selectedId) {
-        setSelectedId(decoded[0].id);
-      }
+      setSelectedId((current) => {
+        if (decoded.length === 0) return null;
+        if (current && decoded.some((p) => p.id === current)) return current;
+        return decoded[0].id;
+      });
       setError(null);
     } catch (e) {
       setError(String(e));
       setCfg(null);
       setProfiles([]);
     }
-  }, [selectedId]);
+  }, []);
 
   useEffect(() => {
     void refresh();

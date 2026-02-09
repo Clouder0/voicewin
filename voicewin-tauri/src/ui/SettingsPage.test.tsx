@@ -92,3 +92,46 @@ describe('SettingsPage ElevenLabs key save', () => {
     expect(invokeMock).toHaveBeenCalledWith('set_elevenlabs_api_key', { apiKey: 'xi_test_123' });
   });
 });
+
+describe('SettingsPage loading and local model status', () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+  });
+
+  it('keeps settings usable when model status call fails', async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'get_config') return baseConfig();
+      if (command === 'get_provider_status') return baseProviderStatus();
+      if (command === 'get_model_status') throw new Error('model status unavailable');
+      throw new Error(`Unexpected invoke command: ${command}`);
+    });
+
+    render(<SettingsPage />);
+
+    expect(await screen.findByDisplayValue('ElevenLabs')).toBeInTheDocument();
+  });
+
+  it('shows missing local model status when no local model is valid', async () => {
+    const user = userEvent.setup();
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'get_config') return baseConfig();
+      if (command === 'get_provider_status') return baseProviderStatus();
+      if (command === 'get_model_status') {
+        return {
+          bootstrap_ok: false,
+          bootstrap_path: 'C:/voicewin/models/bootstrap.bin',
+          preferred_ok: false,
+          preferred_path: 'C:/voicewin/models/ggml-base.bin',
+        };
+      }
+      throw new Error(`Unexpected invoke command: ${command}`);
+    });
+
+    render(<SettingsPage />);
+
+    const providerSelect = await screen.findByDisplayValue('ElevenLabs');
+    await user.selectOptions(providerSelect, 'local');
+
+    expect(await screen.findByText('Missing')).toBeInTheDocument();
+  });
+});

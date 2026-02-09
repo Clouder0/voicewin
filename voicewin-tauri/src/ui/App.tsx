@@ -16,17 +16,25 @@ export function App() {
   const [page, setPage] = useState<Page>('overview');
 
   useEffect(() => {
+    let disposed = false;
     let unlisten: null | (() => void) = null;
 
     async function start() {
         try {
           const { listen } = await import('@tauri-apps/api/event');
-          unlisten = await listen<Page>('voicewin://navigate', (e) => {
+          const nextUnlisten = await listen<Page>('voicewin://navigate', (e) => {
             const dest = e.payload;
             if (dest === 'overview' || dest === 'profiles' || dest === 'models' || dest === 'history' || dest === 'settings') {
               setPage(dest);
             }
           });
+
+          if (disposed) {
+            nextUnlisten();
+            return;
+          }
+
+          unlisten = nextUnlisten;
         } catch {
           // Not running inside Tauri.
         }
@@ -35,6 +43,7 @@ export function App() {
     void start();
 
     return () => {
+      disposed = true;
       if (unlisten) unlisten();
     };
   }, []);
@@ -81,6 +90,7 @@ export function App() {
           type="button"
           className="vw-navItem"
           data-active={page === 'overview'}
+          aria-current={page === 'overview' ? 'page' : undefined}
           onClick={() => setPage('overview')}
           aria-label="Overview"
           title="Overview"
@@ -91,6 +101,7 @@ export function App() {
           type="button"
           className="vw-navItem"
           data-active={page === 'profiles'}
+          aria-current={page === 'profiles' ? 'page' : undefined}
           onClick={() => setPage('profiles')}
           aria-label="Profiles"
           title="Profiles"
@@ -101,6 +112,7 @@ export function App() {
           type="button"
           className="vw-navItem"
           data-active={page === 'models'}
+          aria-current={page === 'models' ? 'page' : undefined}
           onClick={() => setPage('models')}
           aria-label="Models"
           title="Models"
@@ -111,6 +123,7 @@ export function App() {
           type="button"
           className="vw-navItem"
           data-active={page === 'history'}
+          aria-current={page === 'history' ? 'page' : undefined}
           onClick={() => setPage('history')}
           aria-label="History"
           title="History"
@@ -121,6 +134,7 @@ export function App() {
           type="button"
           className="vw-navItem"
           data-active={page === 'settings'}
+          aria-current={page === 'settings' ? 'page' : undefined}
           onClick={() => setPage('settings')}
           aria-label="Settings"
           title="Settings"

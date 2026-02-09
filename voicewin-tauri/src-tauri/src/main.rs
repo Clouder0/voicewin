@@ -25,21 +25,29 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 #[cfg(windows)]
 use window_vibrancy::apply_tabbed;
 
-#[cfg(target_os = "linux")]
 fn load_tray_icon(app: &tauri::AppHandle) -> Option<tauri::image::Image<'static>> {
-    let path = app
+    if let Some(icon) = tray_icon::load_embedded_tray_icon() {
+        return Some(icon);
+    }
+
+    let path = match app
         .path()
         .resolve("icons/32x32.png", tauri::path::BaseDirectory::Resource)
-        .ok()?;
+    {
+        Ok(path) => path,
+        Err(e) => {
+            log::error!("failed to resolve tray icon resource path: {e}");
+            return None;
+        }
+    };
 
-    tauri::image::Image::from_path(path)
-        .ok()
-        .map(|i| i.to_owned())
-}
-
-#[cfg(not(target_os = "linux"))]
-fn load_tray_icon(_app: &tauri::AppHandle) -> Option<tauri::image::Image<'static>> {
-    None
+    match tauri::image::Image::from_path(path) {
+        Ok(icon) => Some(icon.to_owned()),
+        Err(e) => {
+            log::error!("failed to decode tray icon resource file: {e}");
+            None
+        }
+    }
 }
 use voicewin_appcore::service::AppService;
 use voicewin_core::config::AppConfig;
@@ -80,6 +88,7 @@ const BUNDLED_TINY_MODEL_ID: &str = "whisper-tiny-bundled";
 use voicewin_audio::AudioRecorder;
 
 mod session_controller;
+mod tray_icon;
 use session_controller::{SessionController, ToggleResult};
 
 // Design-draft: pill bottom should be 80px above the monitor bottom.
@@ -652,6 +661,13 @@ async fn delete_history_entry(
     store
         .delete_entry(ts_unix_ms, &text)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_history_entry_by_id(app: tauri::AppHandle, id: String) -> Result<bool, String> {
+    let path = default_history_path(&app).map_err(|e| e.to_string())?;
+    let store = voicewin_runtime::history::HistoryStore::at_path(path);
+    store.delete_entry_by_id(&id).map_err(|e| e.to_string())
 }
 
 #[derive(serde::Serialize)]
@@ -1329,6 +1345,7 @@ fn main() {
             get_history,
             clear_history,
             delete_history_entry,
+            delete_history_entry_by_id,
             get_provider_status,
             set_openai_api_key,
             clear_openai_api_key,
@@ -1682,6 +1699,7 @@ fn main() {
                 // Register with handler.
                 let session = session.clone();
                 let svc_cell = app_state.service.clone();
+                let toggle_for_hotkey = toggle.clone();
 
                 match app_handle.global_shortcut().on_shortcut(
                     hotkey.as_str(),
@@ -1693,6 +1711,7 @@ fn main() {
                         let app = app.clone();
                         let session = session.clone();
                         let svc_cell = svc_cell.clone();
+                        let toggle_for_hotkey = toggle_for_hotkey.clone();
 
                         tauri::async_runtime::spawn(async move {
                             let svc = match svc_cell
@@ -1706,7 +1725,12 @@ fn main() {
                                 }
                             };
 
-                            let _ = session.toggle_recording(&app, svc.clone()).await;
+                            let res = session.toggle_recording(&app, svc.clone()).await;
+                            let _ = toggle_for_hotkey.set_text(if res.is_recording {
+                                "Stop Recording"
+                            } else {
+                                "Start Recording"
+                            });
                         });
                     },
                 ) {

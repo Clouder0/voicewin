@@ -1,6 +1,7 @@
 use std::sync::Arc;
 #[cfg(any(windows, target_os = "macos"))]
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicBool as GateAtomicBool, Ordering as GateOrdering};
 #[cfg(any(windows, target_os = "macos"))]
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -115,10 +116,21 @@ struct Inner {
     realtime_stt: Option<RealtimeSttState>,
 }
 
+struct TransitionGuard {
+    gate: Arc<GateAtomicBool>,
+}
+
+impl Drop for TransitionGuard {
+    fn drop(&mut self) {
+        self.gate.store(false, GateOrdering::Release);
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct SessionController {
     #[allow(dead_code)]
     inner: Arc<Mutex<Inner>>,
+    transition_gate: Arc<GateAtomicBool>,
 }
 
 impl SessionController {
@@ -129,6 +141,16 @@ impl SessionController {
 
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn try_acquire_transition(&self) -> Option<TransitionGuard> {
+        if self.transition_gate.swap(true, GateOrdering::AcqRel) {
+            return None;
+        }
+
+        Some(TransitionGuard {
+            gate: self.transition_gate.clone(),
+        })
     }
 
     fn prune_status_message(inner: &mut Inner) {
@@ -347,6 +369,20 @@ impl SessionController {
     }
 
     pub async fn cancel_recording(&self, app: &tauri::AppHandle, svc: AppService) -> ToggleResult {
+        let _transition_guard = match self.try_acquire_transition() {
+            Some(g) => g,
+            None => {
+                self.set_status_message(app, "busy".into(), Self::BUSY_TOAST_TTL)
+                    .await;
+                return ToggleResult {
+                    stage: "busy".into(),
+                    final_text: None,
+                    error: Some("busy".into()),
+                    is_recording: self.inner.lock().await.stage == SessionStage::Recording,
+                };
+            }
+        };
+
         let stage = { self.inner.lock().await.stage };
         match stage {
             SessionStage::Recording => {
@@ -493,6 +529,20 @@ impl SessionController {
     }
 
     pub async fn toggle_recording(&self, app: &tauri::AppHandle, svc: AppService) -> ToggleResult {
+        let _transition_guard = match self.try_acquire_transition() {
+            Some(g) => g,
+            None => {
+                self.set_status_message(app, "busy".into(), Self::BUSY_TOAST_TTL)
+                    .await;
+                return ToggleResult {
+                    stage: "busy".into(),
+                    final_text: None,
+                    error: Some("busy".into()),
+                    is_recording: self.inner.lock().await.stage == SessionStage::Recording,
+                };
+            }
+        };
+
         // Minimal controller behavior:
         // - idle -> start recording
         // - recording -> stop and run
@@ -1266,5 +1316,19 @@ pub fn smooth_level(prev: f32, next: f32, dt: Duration) -> f32 {
     prev + (next - prev) * alpha
 }
 
-// No unit tests here: this file is a Tauri implementation detail and these helpers are
-// only used when the recording path is enabled on the current OS.
+#[cfg(test)]
+mod tests {
+    use super::SessionController;
+
+    #[tokio::test]
+    async fn transition_gate_blocks_parallel_entries() {
+        let controller = SessionController::new();
+
+        let gate = controller.try_acquire_transition();
+        assert!(gate.is_some());
+        assert!(controller.try_acquire_transition().is_none());
+
+        drop(gate);
+        assert!(controller.try_acquire_transition().is_some());
+    }
+}

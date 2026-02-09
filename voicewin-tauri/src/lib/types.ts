@@ -89,6 +89,7 @@ export type AppConfig = {
 };
 
 export type HistoryEntry = {
+  id?: string | null;
   ts_unix_ms: number;
   app_process_name?: string | null;
   app_exe_path?: string | null;

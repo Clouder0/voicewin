@@ -18,6 +18,13 @@ type SettingsDraft = {
   elevenlabs_stt_model: 'scribe_v2' | 'scribe_v2_realtime';
 };
 
+const EMPTY_PROVIDER_STATUS: ProviderStatus = {
+  openai_api_key_present: false,
+  openai_api_key_error: null,
+  elevenlabs_api_key_present: false,
+  elevenlabs_api_key_error: null,
+};
+
 function buildConfigFromDraft(cfg: AppConfig, draft: SettingsDraft, modelStatus: ModelStatus | null): AppConfig {
   return {
     ...cfg,
@@ -119,13 +126,27 @@ export function SettingsPage() {
       if (!isTauri()) return;
 
       const nextCfg = await invoke<AppConfig>('get_config');
-      const nextProviders = await invoke<ProviderStatus>('get_provider_status');
-      const nextModelStatus = await invoke<ModelStatus>('get_model_status');
-
       setCfg(nextCfg);
-      setProviders(nextProviders);
-      setModelStatus(nextModelStatus);
-      setError(null);
+
+      const warnings: string[] = [];
+
+      try {
+        const nextProviders = await invoke<ProviderStatus>('get_provider_status');
+        setProviders(nextProviders);
+      } catch (e) {
+        warnings.push(`Provider status unavailable: ${String(e)}`);
+        setProviders((prev) => prev ?? EMPTY_PROVIDER_STATUS);
+      }
+
+      try {
+        const nextModelStatus = await invoke<ModelStatus>('get_model_status');
+        setModelStatus(nextModelStatus);
+      } catch (e) {
+        warnings.push(`Model status unavailable: ${String(e)}`);
+        setModelStatus(null);
+      }
+
+      setError(warnings.length > 0 ? warnings.join(' | ') : null);
     } catch (e) {
       setError(String(e));
     }
@@ -208,6 +229,19 @@ export function SettingsPage() {
   const openaiApiKeyDraftTrimmed = openaiApiKeyDraft.trim();
   const elevenApiKeyDraftTrimmed = elevenApiKeyDraft.trim();
 
+  const localModelStatus = useMemo(() => {
+    if (!modelStatus) return 'Unknown';
+    if (modelStatus.preferred_ok) return 'Ready (Preferred)';
+    if (modelStatus.bootstrap_ok) return 'Ready (Bootstrap)';
+    return 'Missing';
+  }, [modelStatus]);
+
+  const localModelStatusColor = useMemo(() => {
+    if (!modelStatus) return 'var(--text-secondary)';
+    if (modelStatus.preferred_ok || modelStatus.bootstrap_ok) return 'var(--color-success-fg)';
+    return 'var(--color-danger-fg)';
+  }, [modelStatus]);
+
   const baseUrlLooksMissingV1 = useMemo(() => {
     const u = draft.llm_base_url.trim();
     if (!u) return false;
@@ -286,7 +320,7 @@ export function SettingsPage() {
           <SettingRow
             title="Local model"
             description="Use the Models tab to download/switch local Whisper models."
-            right={<span className="vw-type-caption">Configured</span>}
+            right={<span className="vw-type-caption" style={{ color: localModelStatusColor }}>{localModelStatus}</span>}
           />
         ) : (
           <SettingRow
