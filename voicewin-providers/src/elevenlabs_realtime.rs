@@ -138,8 +138,13 @@ pub enum RealtimeEvent {
 
 #[derive(Debug)]
 enum RealtimeCmd {
-    AudioChunk { pcm_s16le: Vec<u8>, commit: bool },
-    Finalize { respond_to: oneshot::Sender<anyhow::Result<String>> },
+    AudioChunk {
+        pcm_s16le: Vec<u8>,
+        commit: bool,
+    },
+    Finalize {
+        respond_to: oneshot::Sender<anyhow::Result<String>>,
+    },
     Shutdown,
 }
 
@@ -208,10 +213,11 @@ pub async fn spawn_realtime_session(
     let (evt_tx, evt_rx) = mpsc::channel::<RealtimeEvent>(64);
 
     // Connect with a hard timeout so we can't hang on a bad network.
-    let (ws, _resp) = tokio::time::timeout(cfg.connect_timeout, tokio_tungstenite::connect_async(req))
-        .await
-        .map_err(|_| anyhow!("ElevenLabs realtime connect timed out"))?
-        .context("connect elevenlabs realtime websocket")?;
+    let (ws, _resp) =
+        tokio::time::timeout(cfg.connect_timeout, tokio_tungstenite::connect_async(req))
+            .await
+            .map_err(|_| anyhow!("ElevenLabs realtime connect timed out"))?
+            .context("connect elevenlabs realtime websocket")?;
 
     let (ws_write, mut ws_read) = ws.split();
 
@@ -609,7 +615,10 @@ fn build_input_audio_chunk_message(
 
     if let Some(prev) = previous_text {
         if let Some(map) = obj.as_object_mut() {
-            map.insert("previous_text".into(), serde_json::Value::String(prev.to_string()));
+            map.insert(
+                "previous_text".into(),
+                serde_json::Value::String(prev.to_string()),
+            );
         }
     }
 
@@ -641,11 +650,19 @@ fn parse_realtime_message(s: &str) -> anyhow::Result<ParsedRealtime> {
             Ok(ParsedRealtime::SessionStarted { session_id })
         }
         "partial_transcript" => {
-            let text = v.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let text = v
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             Ok(ParsedRealtime::PartialTranscript { text })
         }
         "committed_transcript" | "committed_transcript_with_timestamps" => {
-            let text = v.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let text = v
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             Ok(ParsedRealtime::CommittedTranscript { text })
         }
         // Error family: treat as fatal for realtime session.
@@ -662,7 +679,11 @@ fn parse_realtime_message(s: &str) -> anyhow::Result<ParsedRealtime> {
         | "chunk_size_exceeded"
         | "insufficient_audio_activity"
         | "transcriber_error" => {
-            let err = v.get("error").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let err = v
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             Ok(ParsedRealtime::Error {
                 message_type: t.to_string(),
                 error: err,
@@ -712,9 +733,16 @@ mod tests {
         };
 
         let url = build_realtime_ws_url(&cfg).unwrap();
-        let qp: std::collections::HashMap<String, String> = url.query_pairs().into_owned().collect();
-        assert_eq!(qp.get("include_timestamps").map(|s| s.as_str()), Some("false"));
-        assert_eq!(qp.get("include_language_detection").map(|s| s.as_str()), Some("false"));
+        let qp: std::collections::HashMap<String, String> =
+            url.query_pairs().into_owned().collect();
+        assert_eq!(
+            qp.get("include_timestamps").map(|s| s.as_str()),
+            Some("false")
+        );
+        assert_eq!(
+            qp.get("include_language_detection").map(|s| s.as_str()),
+            Some("false")
+        );
         assert!(qp.get("language_code").is_none());
     }
 
@@ -733,7 +761,8 @@ mod tests {
         };
 
         let url = build_realtime_ws_url(&cfg).unwrap();
-        let qp: std::collections::HashMap<String, String> = url.query_pairs().into_owned().collect();
+        let qp: std::collections::HashMap<String, String> =
+            url.query_pairs().into_owned().collect();
         assert_eq!(
             qp.get("include_language_detection").map(|s| s.as_str()),
             Some("false")
@@ -761,20 +790,37 @@ mod tests {
         };
 
         let url = build_realtime_ws_url(&cfg).unwrap();
-        let qp: std::collections::HashMap<String, String> = url.query_pairs().into_owned().collect();
-        assert_eq!(qp.get("vad_silence_threshold_secs").map(|s| s.as_str()), Some("0.6"));
+        let qp: std::collections::HashMap<String, String> =
+            url.query_pairs().into_owned().collect();
+        assert_eq!(
+            qp.get("vad_silence_threshold_secs").map(|s| s.as_str()),
+            Some("0.6")
+        );
         assert_eq!(qp.get("vad_threshold").map(|s| s.as_str()), Some("0.4"));
-        assert_eq!(qp.get("min_speech_duration_ms").map(|s| s.as_str()), Some("100"));
-        assert_eq!(qp.get("min_silence_duration_ms").map(|s| s.as_str()), Some("150"));
+        assert_eq!(
+            qp.get("min_speech_duration_ms").map(|s| s.as_str()),
+            Some("100")
+        );
+        assert_eq!(
+            qp.get("min_silence_duration_ms").map(|s| s.as_str()),
+            Some("150")
+        );
     }
 
     #[test]
     fn parses_partial_and_committed() {
-        let p = parse_realtime_message(r#"{"message_type":"partial_transcript","text":"hi"}"#).unwrap();
+        let p =
+            parse_realtime_message(r#"{"message_type":"partial_transcript","text":"hi"}"#).unwrap();
         assert_eq!(p, ParsedRealtime::PartialTranscript { text: "hi".into() });
 
-        let c = parse_realtime_message(r#"{"message_type":"committed_transcript","text":"hello"}"#).unwrap();
-        assert_eq!(c, ParsedRealtime::CommittedTranscript { text: "hello".into() });
+        let c = parse_realtime_message(r#"{"message_type":"committed_transcript","text":"hello"}"#)
+            .unwrap();
+        assert_eq!(
+            c,
+            ParsedRealtime::CommittedTranscript {
+                text: "hello".into()
+            }
+        );
     }
 
     #[test]
@@ -930,7 +976,10 @@ mod tests {
         let got_partial = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 match events.recv().await {
-                    Some(RealtimeEvent::LiveText { committed: _, partial }) if partial.contains("par") => {
+                    Some(RealtimeEvent::LiveText {
+                        committed: _,
+                        partial,
+                    }) if partial.contains("par") => {
                         return true;
                     }
                     Some(_) => continue,
@@ -1241,7 +1290,11 @@ mod tests {
 
         // Wait until the realtime task processes the auth error.
         loop {
-            if let Some(RealtimeEvent::Error { message_type, error }) = events.recv().await {
+            if let Some(RealtimeEvent::Error {
+                message_type,
+                error,
+            }) = events.recv().await
+            {
                 assert_eq!(message_type, "auth_error");
                 assert!(error.contains("bad key"));
                 break;
@@ -1294,7 +1347,11 @@ mod tests {
         let _ = events.recv().await; // session_started
 
         loop {
-            if let Some(RealtimeEvent::Error { message_type, error }) = events.recv().await {
+            if let Some(RealtimeEvent::Error {
+                message_type,
+                error,
+            }) = events.recv().await
+            {
                 assert_eq!(message_type, "quota_exceeded");
                 assert!(error.contains("no quota"));
                 break;

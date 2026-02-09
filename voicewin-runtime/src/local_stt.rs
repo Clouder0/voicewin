@@ -107,9 +107,9 @@ impl LocalWhisperSttProvider {
 
         let mut out = String::new();
         for i in 0..n {
-            let seg = state
-                .get_segment(i)
-                .ok_or_else(|| anyhow::anyhow!("failed reading whisper segment {i}: out of bounds"))?;
+            let seg = state.get_segment(i).ok_or_else(|| {
+                anyhow::anyhow!("failed reading whisper segment {i}: out of bounds")
+            })?;
             let text = seg
                 .to_str_lossy()
                 .map_err(|e| anyhow::anyhow!("failed reading whisper segment {i}: {e}"))?;

@@ -5,16 +5,16 @@ use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 
 use voicewin_core::types::{AppIdentity, WindowTitle};
-use windows::core::PWSTR;
 use windows::Win32::Foundation::{CloseHandle, HWND};
 use windows::Win32::System::ProcessStatus::K32GetModuleFileNameExW;
 use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_INFORMATION,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_NAME_WIN32,
+    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
+    QueryFullProcessImageNameW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
 };
+use windows::core::PWSTR;
 
 pub fn get_foreground_app_identity() -> anyhow::Result<AppIdentity> {
     unsafe {

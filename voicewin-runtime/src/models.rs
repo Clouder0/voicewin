@@ -231,24 +231,22 @@ pub fn whisper_catalog() -> Vec<ModelDownloadSpec> {
     // network environments; we keep the official Hugging Face URL as a fallback.
     const WHISPER_CPP_COMMIT: &str = "5359861c739e955e79d9a303bcbc70fb988958b1";
 
-    vec![
-        ModelDownloadSpec {
-            id: "whisper-base-q5_1".into(),
-            title: "Whisper Base".into(),
-            url: format!(
-                "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/{WHISPER_CPP_COMMIT}/ggml-base-q5_1.bin"
-            ),
-            alt_url: Some(format!(
-                "https://huggingface.co/ggerganov/whisper.cpp/resolve/{WHISPER_CPP_COMMIT}/ggml-base-q5_1.bin"
-            )),
-            sha256: "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898".into(),
-            filename: "ggml-base-q5_1.bin".into(),
-            size_bytes: Some(59_707_625),
-            speed_label: Some("Medium".into()),
-            accuracy_label: Some("High".into()),
-            recommended: true,
-        },
-    ]
+    vec![ModelDownloadSpec {
+        id: "whisper-base-q5_1".into(),
+        title: "Whisper Base".into(),
+        url: format!(
+            "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/{WHISPER_CPP_COMMIT}/ggml-base-q5_1.bin"
+        ),
+        alt_url: Some(format!(
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/{WHISPER_CPP_COMMIT}/ggml-base-q5_1.bin"
+        )),
+        sha256: "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898".into(),
+        filename: "ggml-base-q5_1.bin".into(),
+        size_bytes: Some(59_707_625),
+        speed_label: Some("Medium".into()),
+        accuracy_label: Some("High".into()),
+        recommended: true,
+    }]
 }
 
 #[cfg(test)]
@@ -287,8 +285,6 @@ mod tests {
 
         assert!(has_gguf_magic(&path).unwrap());
         let err = validate_ggml_file(&path, 4).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("not whisper.cpp GGML"));
+        assert!(err.to_string().contains("not whisper.cpp GGML"));
     }
 }

@@ -126,8 +126,15 @@ impl VoicewinEngine {
             .await?;
         let transcription_ms = ms(t0.elapsed());
 
-        self.run_post_stt_pipeline(result, eff, ctx_snapshot, transcript, Some(transcription_ms), on_stage)
-            .await
+        self.run_post_stt_pipeline(
+            result,
+            eff,
+            ctx_snapshot,
+            transcript,
+            Some(transcription_ms),
+            on_stage,
+        )
+        .await
     }
 
     /// Runs the post-STT pipeline (optional enhance -> insert) given a transcript.
@@ -200,7 +207,8 @@ impl VoicewinEngine {
             result.transcript = Some(transcript);
             result.timings.transcription_ms = transcription_ms;
             result.error = Some(
-                "No speech detected. Try speaking louder or selecting the correct microphone.".into(),
+                "No speech detected. Try speaking louder or selecting the correct microphone."
+                    .into(),
             );
             return Ok(result);
         }

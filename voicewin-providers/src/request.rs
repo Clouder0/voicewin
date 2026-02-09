@@ -17,7 +17,11 @@ impl std::fmt::Debug for HttpRequest {
                 let sensitive = k.eq_ignore_ascii_case("authorization")
                     || k.eq_ignore_ascii_case("xi-api-key")
                     || k.to_ascii_lowercase().contains("api-key");
-                let v = if sensitive { "[REDACTED]".into() } else { v.clone() };
+                let v = if sensitive {
+                    "[REDACTED]".into()
+                } else {
+                    v.clone()
+                };
                 (k.clone(), v)
             })
             .collect();
@@ -26,7 +30,11 @@ impl std::fmt::Debug for HttpRequest {
             Body::Empty => "Empty".to_string(),
             Body::Json(s) => format!("Json(len={})", s.len()),
             Body::MultipartFormData { boundary, bytes } => {
-                format!("MultipartFormData(boundary={}, bytes_len={})", boundary, bytes.len())
+                format!(
+                    "MultipartFormData(boundary={}, bytes_len={})",
+                    boundary,
+                    bytes.len()
+                )
             }
         };
 

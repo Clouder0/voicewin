@@ -99,7 +99,7 @@ impl voicewin_engine::traits::SttProvider for ElevenLabsSttProvider {
 
         let cfg = voicewin_providers::elevenlabs::ElevenLabsSttConfig {
             api_key: self.api_key.clone(),
-             model_id: model_id.to_string(),
+            model_id: model_id.to_string(),
             language_code: match language {
                 "auto" => None,
                 other => Some(other.to_string()),

@@ -349,9 +349,10 @@ async fn transcript_override_empty_is_failure() {
         .await
         .unwrap();
     assert_eq!(res.stage_label.as_deref(), Some("failed"));
-    assert!(res
-        .error
-        .as_deref()
-        .unwrap_or_default()
-        .contains("No speech detected"));
+    assert!(
+        res.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("No speech detected")
+    );
 }

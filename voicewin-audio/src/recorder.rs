@@ -8,7 +8,7 @@
 // Linux support is intentionally not enabled yet because we don't want to introduce
 // new platform dependencies without committing to a full Linux UX.
 
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -119,9 +119,7 @@ impl AudioRecorder {
                     }
                 }
 
-                log::warn!(
-                    "Preferred input device not found, falling back to default: {needle}"
-                );
+                log::warn!("Preferred input device not found, falling back to default: {needle}");
             }
         }
 
@@ -188,7 +186,9 @@ impl AudioRecorder {
                 SampleFormat::F64 => {
                     build_input_stream::<f64>(&device, &config.clone().into(), channels, sample_tx)
                 }
-                _ => build_input_stream::<f32>(&device, &config.clone().into(), channels, sample_tx),
+                _ => {
+                    build_input_stream::<f32>(&device, &config.clone().into(), channels, sample_tx)
+                }
             };
 
             let stream = match stream {
@@ -268,8 +268,12 @@ impl AudioRecorder {
         self.sample_rate_hz
     }
 
-    pub fn resample_to_16k(samples: &[f32], input_rate_hz: u32) -> Result<Vec<f32>, AudioCaptureError> {
-        Ok(resample_mono_f32(samples, input_rate_hz, 16_000).map_err(AudioCaptureError::Resample)?)
+    pub fn resample_to_16k(
+        samples: &[f32],
+        input_rate_hz: u32,
+    ) -> Result<Vec<f32>, AudioCaptureError> {
+        Ok(resample_mono_f32(samples, input_rate_hz, 16_000)
+            .map_err(AudioCaptureError::Resample)?)
     }
 }
 
