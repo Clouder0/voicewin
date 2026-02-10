@@ -369,11 +369,22 @@ pub async fn spawn_realtime_session(
                 }
 
                 msg = ws_read.next() => {
-                    let Some(msg) = msg else { break; };
+                    let Some(msg) = msg else {
+                        let _ = evt_tx.try_send(RealtimeEvent::Error {
+                            message_type: "disconnect".into(),
+                            error: "websocket stream ended".into(),
+                        });
+                        break;
+                    };
                     let msg = match msg {
                         Ok(m) => m,
-                        Err(_) => {
-                            let _ = evt_tx.send(RealtimeEvent::Error { message_type: "disconnect".into(), error: "websocket read failed".into() }).await;
+                        Err(e) => {
+                            let _ = evt_tx
+                                .send(RealtimeEvent::Error {
+                                    message_type: "disconnect".into(),
+                                    error: format!("websocket read failed: {e}"),
+                                })
+                                .await;
                             break;
                         }
                     };
@@ -381,7 +392,17 @@ pub async fn spawn_realtime_session(
                     let text = match msg {
                         Message::Text(t) => t.to_string(),
                         Message::Binary(b) => String::from_utf8_lossy(&b).to_string(),
-                        Message::Close(_) => break,
+                        Message::Close(frame) => {
+                            let detail = frame
+                                .as_ref()
+                                .map(|f| format!("code={:?} reason={}", f.code, f.reason))
+                                .unwrap_or_else(|| "no close frame".into());
+                            let _ = evt_tx.try_send(RealtimeEvent::Error {
+                                message_type: "disconnect".into(),
+                                error: format!("websocket closed: {detail}"),
+                            });
+                            break;
+                        }
                         Message::Ping(p) => {
                             // Best-effort: if we can't respond with Pong, treat as disconnect.
                             match out_ctrl_tx.try_send(Message::Pong(p)) {
