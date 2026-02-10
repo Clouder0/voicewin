@@ -190,6 +190,11 @@ impl ElevenLabsRealtimeHandle {
 pub async fn spawn_realtime_session(
     cfg: ElevenLabsRealtimeConfig,
 ) -> anyhow::Result<(ElevenLabsRealtimeHandle, mpsc::Receiver<RealtimeEvent>)> {
+    // rustls 0.23+ requires selecting a process-level CryptoProvider.
+    // Some dependency feature sets don't pick one automatically, which can panic on first use.
+    // Install the ring provider explicitly (idempotent; ignore "already installed" races).
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     if cfg.api_key.trim().is_empty() {
         return Err(anyhow!("missing ElevenLabs API key"));
     }
