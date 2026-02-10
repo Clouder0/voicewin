@@ -420,12 +420,20 @@ body.overlayPage {
   gap: 2px;
 }
 
-.vw-hudTitle,
-.vw-hudSubtitle {
+
+.vw-hudTitle {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.vw-hudSubtitle {
+  min-width: 0;
+  overflow: hidden;
+  /* Allow long diagnostics (e.g. realtime errors) to be readable. */
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .vw-hudSubtitle {

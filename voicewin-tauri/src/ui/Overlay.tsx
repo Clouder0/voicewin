@@ -367,13 +367,14 @@ export function Overlay() {
     if (status.stage === 'inserting') return 'Pasting...';
     if (status.stage === 'success') return 'Inserted';
     if (status.stage === 'cancelled') return 'Cancelled';
-    if (status.stage === 'error') return status.error ? status.error : 'Error';
+    if (status.stage === 'error') return 'Error';
     return '';
   })();
 
   const subtitle = useMemo(() => {
     // `status.error` is a transient status message (not always a hard error).
-    if (status.stage !== 'error' && status.error) {
+    // Always surface it in the subtitle so the title can stay stable (and avoid truncation).
+    if (status.error) {
       return status.error;
     }
 
@@ -457,7 +458,7 @@ export function Overlay() {
                 </div>
 
                 {subtitle ? (
-                  <div className="vw-type-caption vw-hudSubtitle">
+                  <div className="vw-type-caption vw-hudSubtitle" title={subtitle}>
                     {subtitle}
                   </div>
                 ) : null}

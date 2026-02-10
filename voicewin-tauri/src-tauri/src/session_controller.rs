@@ -821,6 +821,9 @@ impl SessionController {
                                         }
                                         let pcm = pcm_s16le_from_f32(&chunk);
                                         if !handle_for_sender.send_audio_chunk(pcm).await {
+                                            log::warn!(
+                                                "ElevenLabs realtime sender failed (websocket closed); disabling streaming"
+                                            );
                                             // Realtime session died; disable streaming so the audio callback stops enqueueing.
                                             streaming_enabled_for_sender
                                                 .store(false, Ordering::Relaxed);
@@ -837,6 +840,7 @@ impl SessionController {
                                 let last_warning_for_receiver = last_warning.clone();
                                 let receiver_task = tauri::async_runtime::spawn(async move {
                                     let mut last_emit = Instant::now();
+                                    let mut saw_live_text = false;
                                     while let Some(evt) = events.recv().await {
                                         // Don't let stale realtime updates leak into a cancelled/new session.
                                         if receiver_controller.inner.lock().await.session_id
@@ -846,8 +850,23 @@ impl SessionController {
                                         }
 
                                         match evt {
-                                            RealtimeEvent::SessionStarted { .. } => {}
+                                            RealtimeEvent::SessionStarted { session_id } => {
+                                                // Avoid logging secrets; session id is safe and useful for correlating
+                                                // server-side telemetry / support.
+                                                log::info!(
+                                                    "ElevenLabs realtime session started (session_id={session_id})"
+                                                );
+                                            }
                                             RealtimeEvent::LiveText { committed, partial } => {
+                                                if !saw_live_text {
+                                                    saw_live_text = true;
+                                                    log::info!(
+                                                        "ElevenLabs realtime received transcript updates (committed_len={} partial_len={})",
+                                                        committed.trim().len(),
+                                                        partial.trim().len()
+                                                    );
+                                                }
+
                                                 let c = committed.trim();
                                                 let p = partial.trim();
                                                 let live = if c.is_empty() {
@@ -869,6 +888,7 @@ impl SessionController {
                                                     .await;
                                             }
                                             RealtimeEvent::Warning { kind: _, message } => {
+                                                log::warn!("ElevenLabs realtime warning: {message}");
                                                 // Persist the latest warning so stop-time History can reflect it.
                                                 if let Ok(mut guard) =
                                                     last_warning_for_receiver.lock()
@@ -887,6 +907,9 @@ impl SessionController {
                                                 message_type,
                                                 error,
                                             } => {
+                                                log::warn!(
+                                                    "ElevenLabs realtime error ({message_type}): {error}"
+                                                );
                                                 // Stop feeding realtime immediately; we'll fall back to batch on stop.
                                                 streaming_enabled_for_receiver
                                                     .store(false, Ordering::Relaxed);
@@ -1045,6 +1068,7 @@ impl SessionController {
                                 let msg = format!(
                                     "ElevenLabs realtime dropped {dropped} audio chunks; transcript may be incomplete."
                                 );
+                                log::warn!("{msg}");
                                 merge_warning(&mut warning, msg.clone());
                                 controller
                                     .set_status_message(
@@ -1058,18 +1082,25 @@ impl SessionController {
                             // Surface any provider-side warnings (e.g. outbound backpressure drops).
                             if let Ok(guard) = rt.last_warning.lock() {
                                 if let Some(w) = guard.clone() {
+                                    log::warn!("ElevenLabs realtime warning (recording): {w}");
                                     merge_warning(&mut warning, w);
                                 }
                             }
 
+                            log::info!("ElevenLabs realtime finalize started");
                             match rt.handle.finalize().await {
                                 Ok(t) => {
                                     if let Some(t) =
                                         voicewin_core::stt::accept_transcript_override(t)
                                     {
+                                        log::info!(
+                                            "ElevenLabs realtime finalize ok; using transcript override (chars={})",
+                                            t.trim().len()
+                                        );
                                         transcript_override = t;
                                     } else {
                                         let msg = "ElevenLabs realtime produced no text; using batch on stop.".to_string();
+                                        log::warn!("{msg}");
                                         merge_warning(&mut warning, msg.clone());
                                         controller
                                             .set_status_message(
@@ -1090,6 +1121,7 @@ impl SessionController {
                                     let msg = format!(
                                         "ElevenLabs realtime failed; using batch on stop. ({detail})"
                                     );
+                                    log::warn!("{msg}");
                                     merge_warning(&mut warning, msg.clone());
                                     controller
                                         .set_status_message(
