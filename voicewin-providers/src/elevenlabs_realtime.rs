@@ -111,7 +111,7 @@ impl ElevenLabsRealtimeConfig {
             ws_url: Url::parse("wss://api.elevenlabs.io/v1/speech-to-text/realtime")
                 .context("parse elevenlabs realtime url")?,
             api_key: api_key.into(),
-            model_id: "scribe_v2".into(),
+            model_id: "scribe_v2_realtime".into(),
             language_code: None,
             sample_rate_hz,
             commit_strategy: "vad".into(),
@@ -742,6 +742,17 @@ mod tests {
         assert!(!should_emit_backpressure_warning(49));
         assert!(should_emit_backpressure_warning(50));
         assert!(should_emit_backpressure_warning(100));
+    }
+
+    #[test]
+    fn production_config_uses_realtime_model_id() {
+        let cfg = ElevenLabsRealtimeConfig::production("k", 16_000).unwrap();
+        assert_eq!(cfg.model_id, "scribe_v2_realtime");
+
+        let url = build_realtime_ws_url(&cfg).unwrap();
+        let qp: std::collections::HashMap<String, String> =
+            url.query_pairs().into_owned().collect();
+        assert_eq!(qp.get("model_id").map(|s| s.as_str()), Some("scribe_v2_realtime"));
     }
 
     #[test]

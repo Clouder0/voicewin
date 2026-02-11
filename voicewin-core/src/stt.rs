@@ -5,8 +5,8 @@ pub const STT_PROVIDER_ELEVENLABS: &str = "elevenlabs";
 
 // ElevenLabs model selectors as exposed by VoiceWin.
 //
-// Note: `ELEVENLABS_MODEL_SCRIBE_V2_REALTIME` is an app-level selector; ElevenLabs uses
-// `scribe_v2` for both batch and realtime model IDs.
+// Note: VoiceWin exposes realtime as a separate selector. The batch HTTP endpoint expects
+// `scribe_v2`, while the realtime websocket endpoint expects `scribe_v2_realtime`.
 pub const ELEVENLABS_MODEL_SCRIBE_V2: &str = "scribe_v2";
 pub const ELEVENLABS_MODEL_SCRIBE_V2_REALTIME: &str = "scribe_v2_realtime";
 

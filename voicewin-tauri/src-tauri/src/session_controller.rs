@@ -797,7 +797,8 @@ impl SessionController {
                         };
 
                         log::info!(
-                            "ElevenLabs realtime config: commit_strategy={:?} language_code={:?}",
+                            "ElevenLabs realtime config: model_id={:?} commit_strategy={:?} language_code={:?}",
+                            rt_cfg.model_id,
                             rt_cfg.commit_strategy,
                             rt_cfg.language_code
                         );
