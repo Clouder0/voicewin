@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool as GateAtomicBool, Ordering as GateOrdering};
 #[cfg(any(windows, target_os = "macos"))]
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use tauri::{Emitter, Manager};
@@ -82,17 +82,40 @@ pub struct MicLevelPayload {
 }
 
 #[cfg(any(windows, target_os = "macos"))]
+enum RealtimeUploaderCmd {
+    // Drain any queued frames and report whether all audio was sent successfully.
+    Drain {
+        respond_to: tokio::sync::oneshot::Sender<bool>,
+    },
+}
+
+#[cfg(any(windows, target_os = "macos"))]
 struct RealtimeSttState {
     handle: ElevenLabsRealtimeHandle,
-    sender_task: tauri::async_runtime::JoinHandle<()>,
+    uploader_cmd_tx: tokio::sync::mpsc::Sender<RealtimeUploaderCmd>,
+    uploader_task: tauri::async_runtime::JoinHandle<()>,
     receiver_task: tauri::async_runtime::JoinHandle<()>,
     streaming_enabled: Arc<AtomicBool>,
     dropped_chunks: Arc<AtomicU64>,
+
+    // Lightweight diagnostics for stop-time catch-up.
+    captured_frames: Arc<AtomicU64>,
+    sent_frames: Arc<AtomicU64>,
+
+    // Used to flush the final partial frame on stop.
+    audio_tx: tokio::sync::mpsc::Sender<Vec<f32>>,
+    chunker: Arc<StdMutex<RealtimeFrameChunker>>,
 
     // Best-effort diagnostics/warnings to surface on stop (and persist to History).
     last_error: Arc<StdMutex<Option<String>>>,
     last_warning: Arc<StdMutex<Option<String>>>,
 }
+
+#[cfg(any(windows, target_os = "macos"))]
+const REALTIME_FRAME_MS_DEFAULT: u64 = 50;
+
+#[cfg(any(windows, target_os = "macos"))]
+const REALTIME_BUFFER_MS_DEFAULT: u64 = 5_000;
 
 #[derive(Default)]
 struct Inner {
@@ -395,7 +418,7 @@ impl SessionController {
                     };
                     if let Some(rt) = rt {
                         rt.streaming_enabled.store(false, Ordering::Relaxed);
-                        rt.sender_task.abort();
+                        rt.uploader_task.abort();
                         rt.receiver_task.abort();
                         tauri::async_runtime::spawn(async move {
                             rt.handle.shutdown().await;
@@ -470,7 +493,7 @@ impl SessionController {
                     };
                     if let Some(rt) = rt {
                         rt.streaming_enabled.store(false, Ordering::Relaxed);
-                        rt.sender_task.abort();
+                        rt.uploader_task.abort();
                         rt.receiver_task.abort();
                         tauri::async_runtime::spawn(async move {
                             rt.handle.shutdown().await;
@@ -679,9 +702,23 @@ impl SessionController {
                     }
 
                     // Realtime streaming plumbing.
+                    let buffer_frames = (REALTIME_BUFFER_MS_DEFAULT / REALTIME_FRAME_MS_DEFAULT)
+                        .max(1)
+                        .min(400) as usize;
+
                     let streaming_enabled = Arc::new(AtomicBool::new(wants_realtime));
                     let dropped_chunks = Arc::new(AtomicU64::new(0));
-                    let (audio_tx, mut audio_rx) = tokio::sync::mpsc::channel::<Vec<f32>>(64);
+                    let captured_frames = Arc::new(AtomicU64::new(0));
+                    let sent_frames = Arc::new(AtomicU64::new(0));
+
+                    // Default to a ~50ms frame at 48kHz; once the recorder is opened we will
+                    // update this based on the actual device sample rate.
+                    let frame_samples = Arc::new(AtomicUsize::new(2400));
+                    let chunker = Arc::new(StdMutex::new(RealtimeFrameChunker::default()));
+
+                    // Bounded, time-ish buffer: `buffer_frames * REALTIME_FRAME_MS`.
+                    let (audio_tx, mut audio_rx) =
+                        tokio::sync::mpsc::channel::<Vec<f32>>(buffer_frames);
 
                     struct LevelEmitState {
                         last_emit: Instant,
@@ -703,15 +740,35 @@ impl SessionController {
                             let app_handle = app_handle.clone();
                             let streaming_enabled = streaming_enabled.clone();
                             let dropped_chunks = dropped_chunks.clone();
+                            let captured_frames = captured_frames.clone();
+                            let frame_samples = frame_samples.clone();
+                            let chunker = chunker.clone();
                             let audio_tx = audio_tx.clone();
                             move |chunk: &[f32]| {
                                 let now = Instant::now();
 
-                                // For realtime STT, do NOT throttle or drop chunks here.
-                                // Send every chunk best-effort and let the bounded channel provide backpressure.
+                                // Realtime framing is done here so the callback->tokio bridge is time-based
+                                // (fixed-ish frames) rather than "N driver chunks".
                                 if streaming_enabled.load(Ordering::Relaxed) {
-                                    if audio_tx.try_send(chunk.to_vec()).is_err() {
-                                        dropped_chunks.fetch_add(1, Ordering::Relaxed);
+                                    let frame_len = frame_samples.load(Ordering::Relaxed).max(1);
+                                    let frames = {
+                                        let mut guard = match chunker.lock() {
+                                            Ok(g) => g,
+                                            Err(poisoned) => poisoned.into_inner(),
+                                        };
+                                        guard.push(chunk, frame_len)
+                                    };
+
+                                    for frame in frames {
+                                        if audio_tx.try_send(frame).is_err() {
+                                            // Bounded channel is full: realtime cannot keep up.
+                                            dropped_chunks.fetch_add(1, Ordering::Relaxed);
+                                            streaming_enabled.store(false, Ordering::Relaxed);
+                                            log::warn!("realtime audio queue full; disabling realtime streaming");
+                                            break;
+                                        } else {
+                                            captured_frames.fetch_add(1, Ordering::Relaxed);
+                                        }
                                     }
                                 }
 
@@ -763,6 +820,17 @@ impl SessionController {
                     if wants_realtime {
                         let sr = svc.recording_sample_rate_hz().await.unwrap_or(16_000);
 
+                        // Update realtime framing to match the device sample rate.
+                        let frame_len =
+                            ((sr as usize) * (REALTIME_FRAME_MS_DEFAULT as usize) / 1000)
+                            .max(1)
+                            .min(sr as usize);
+                        frame_samples.store(frame_len, Ordering::Relaxed);
+                        log::info!(
+                            "realtime audio framing: frame_ms={REALTIME_FRAME_MS_DEFAULT} frame_samples={frame_len} buffer_frames={buffer_frames} (~{}ms)",
+                            buffer_frames as u64 * REALTIME_FRAME_MS_DEFAULT
+                        );
+
                         log::info!(
                             "ElevenLabs realtime requested; starting WS session (sample_rate_hz={sr})"
                         );
@@ -803,32 +871,79 @@ impl SessionController {
                             rt_cfg.language_code
                         );
 
+                        let connect_start = Instant::now();
                         match spawn_realtime_session(rt_cfg).await {
                             Ok((handle, mut events)) => {
-                                log::info!("ElevenLabs realtime WS session started");
+                                log::info!(
+                                    "ElevenLabs realtime WS session started (connect_ms={})",
+                                    connect_start.elapsed().as_millis()
+                                );
 
                                 let last_error = Arc::new(StdMutex::new(None));
                                 let last_warning = Arc::new(StdMutex::new(None));
                                 let session_id_for_realtime =
                                     { controller.inner.lock().await.session_id };
 
-                                // Sender task: convert f32 -> PCM16 and stream to WS.
-                                let handle_for_sender = handle.clone();
-                                let streaming_enabled_for_sender = streaming_enabled.clone();
-                                let sender_task = tauri::async_runtime::spawn(async move {
-                                    while let Some(chunk) = audio_rx.recv().await {
-                                        if !streaming_enabled_for_sender.load(Ordering::Relaxed) {
-                                            continue;
-                                        }
-                                        let pcm = pcm_s16le_from_f32(&chunk);
-                                        if !handle_for_sender.send_audio_chunk(pcm).await {
-                                            log::warn!(
-                                                "ElevenLabs realtime sender failed (websocket closed); disabling streaming"
-                                            );
-                                            // Realtime session died; disable streaming so the audio callback stops enqueueing.
-                                            streaming_enabled_for_sender
-                                                .store(false, Ordering::Relaxed);
+                                let (uploader_cmd_tx, mut uploader_cmd_rx) =
+                                    tokio::sync::mpsc::channel::<RealtimeUploaderCmd>(2);
+
+                                // Uploader task: convert f32 -> PCM16 and stream to WS.
+                                let handle_for_uploader = handle.clone();
+                                let streaming_enabled_for_uploader = streaming_enabled.clone();
+                                let sent_frames_for_uploader = sent_frames.clone();
+                                let uploader_task = tauri::async_runtime::spawn(async move {
+                                    let mut drain_waiter: Option<tokio::sync::oneshot::Sender<bool>> = None;
+                                    let mut drain_ok = true;
+
+                                    loop {
+                                        if let Some(respond_to) = drain_waiter.take() {
+                                            // Drain any currently queued frames without waiting.
+                                            loop {
+                                                match audio_rx.try_recv() {
+                                                    Ok(frame) => {
+                                                        let pcm = pcm_s16le_from_f32(&frame);
+                                                        if !handle_for_uploader.send_audio_chunk(pcm).await {
+                                                            drain_ok = false;
+                                                            streaming_enabled_for_uploader
+                                                                .store(false, Ordering::Relaxed);
+                                                            break;
+                                                        }
+                                                        sent_frames_for_uploader.fetch_add(1, Ordering::Relaxed);
+                                                    }
+                                                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                                                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+                                                }
+                                            }
+
+                                            let _ = respond_to.send(drain_ok);
                                             break;
+                                        }
+
+                                        tokio::select! {
+                                            cmd = uploader_cmd_rx.recv() => {
+                                                match cmd {
+                                                    Some(RealtimeUploaderCmd::Drain { respond_to }) => {
+                                                        drain_waiter = Some(respond_to);
+                                                    }
+                                                    None => break,
+                                                }
+                                            }
+                                            frame = audio_rx.recv() => {
+                                                let Some(frame) = frame else {
+                                                    break;
+                                                };
+                                                let pcm = pcm_s16le_from_f32(&frame);
+                                                if !handle_for_uploader.send_audio_chunk(pcm).await {
+                                                    drain_ok = false;
+                                                    log::warn!(
+                                                        "ElevenLabs realtime uploader failed (websocket closed); disabling streaming"
+                                                    );
+                                                    // Realtime session died; disable streaming so the audio callback stops enqueueing.
+                                                    streaming_enabled_for_uploader.store(false, Ordering::Relaxed);
+                                                    break;
+                                                }
+                                                sent_frames_for_uploader.fetch_add(1, Ordering::Relaxed);
+                                            }
                                         }
                                     }
                                 });
@@ -943,10 +1058,15 @@ impl SessionController {
                                     let mut inner = controller.inner.lock().await;
                                     inner.realtime_stt = Some(RealtimeSttState {
                                         handle,
-                                        sender_task,
+                                        uploader_cmd_tx,
+                                        uploader_task,
                                         receiver_task,
                                         streaming_enabled: streaming_enabled.clone(),
                                         dropped_chunks: dropped_chunks.clone(),
+                                        captured_frames: captured_frames.clone(),
+                                        sent_frames: sent_frames.clone(),
+                                        audio_tx: audio_tx.clone(),
+                                        chunker: chunker.clone(),
                                         last_error,
                                         last_warning,
                                     });
@@ -1000,8 +1120,7 @@ impl SessionController {
 
                     if let Some(rt) = realtime.as_ref() {
                         rt.streaming_enabled.store(false, Ordering::Relaxed);
-                        // No more audio will be sent after stop; abort the sender task.
-                        rt.sender_task.abort();
+                        // Stop feeding new audio frames from the mic callback.
                     }
 
                     let audio = match svc.clone().stop_recording().await {
@@ -1064,6 +1183,19 @@ impl SessionController {
                         }
 
                         if let Some(rt) = realtime {
+                            let finalize_budget = Duration::from_secs(2);
+                            let finalize_started = Instant::now();
+
+                            let mut allow_override = true;
+
+                            let captured = rt.captured_frames.load(Ordering::Relaxed);
+                            let sent = rt.sent_frames.load(Ordering::Relaxed);
+                            let backlog_frames = captured.saturating_sub(sent);
+                            log::info!(
+                                "ElevenLabs realtime stop: captured_frames={captured} sent_frames={sent} backlog_frames={backlog_frames} (~{}ms)",
+                                backlog_frames as u64 * REALTIME_FRAME_MS_DEFAULT
+                            );
+
                             let dropped = rt.dropped_chunks.load(Ordering::Relaxed);
                             if dropped > 0 {
                                 let msg = format!(
@@ -1071,6 +1203,8 @@ impl SessionController {
                                 );
                                 log::warn!("{msg}");
                                 merge_warning(&mut warning, msg.clone());
+                                // Audio was lost client-side; don't trust realtime output.
+                                allow_override = false;
                                 controller
                                     .set_status_message(
                                         &app_handle,
@@ -1084,57 +1218,194 @@ impl SessionController {
                             if let Ok(guard) = rt.last_warning.lock() {
                                 if let Some(w) = guard.clone() {
                                     log::warn!("ElevenLabs realtime warning (recording): {w}");
+                                    // If the provider reports drops/backpressure, don't trust realtime output.
+                                    if w.to_lowercase().contains("dropped")
+                                        || w.to_lowercase().contains("backpressure")
+                                    {
+                                        allow_override = false;
+                                    }
                                     merge_warning(&mut warning, w);
                                 }
                             }
 
-                            log::info!("ElevenLabs realtime finalize started");
-                            match rt.handle.finalize().await {
-                                Ok(t) => {
-                                    if let Some(t) =
-                                        voicewin_core::stt::accept_transcript_override(t)
-                                    {
-                                        log::info!(
-                                            "ElevenLabs realtime finalize ok; using transcript override (chars={})",
-                                            t.trim().len()
-                                        );
-                                        transcript_override = t;
-                                    } else {
-                                        let msg = "ElevenLabs realtime produced no text; using batch on stop.".to_string();
-                                        log::warn!("{msg}");
-                                        merge_warning(&mut warning, msg.clone());
-                                        controller
-                                            .set_status_message(
-                                                &app_handle,
-                                                msg,
-                                                Duration::from_millis(2500),
-                                            )
-                                            .await;
+                            // If the receiver recorded an error, treat realtime as unreliable.
+                            if let Ok(guard) = rt.last_error.lock() {
+                                if let Some(e) = guard.clone() {
+                                    if !e.trim().is_empty() {
+                                        allow_override = false;
                                     }
-                                }
-                                Err(e) => {
-                                    let detail = rt
-                                        .last_error
-                                        .lock()
-                                        .ok()
-                                        .and_then(|g| g.clone())
-                                        .unwrap_or_else(|| e.to_string());
-                                    let msg = format!(
-                                        "ElevenLabs realtime failed; using batch on stop. ({detail})"
-                                    );
-                                    log::warn!("{msg}");
-                                    merge_warning(&mut warning, msg.clone());
-                                    controller
-                                        .set_status_message(
-                                            &app_handle,
-                                            msg,
-                                            Duration::from_millis(2500),
-                                        )
-                                        .await;
                                 }
                             }
 
+                            // Catch up: flush the final partial frame, drain queued audio, then finalize.
+                            if allow_override {
+                                // Flush the final partial frame into the queue so it can be uploaded.
+                                let tail = {
+                                    let mut guard = match rt.chunker.lock() {
+                                        Ok(g) => g,
+                                        Err(poisoned) => poisoned.into_inner(),
+                                    };
+                                    guard.flush()
+                                };
+
+                                if let Some(tail) = tail {
+                                    let remaining = finalize_budget
+                                        .checked_sub(finalize_started.elapsed())
+                                        .unwrap_or_default();
+                                    if remaining.is_zero() {
+                                        allow_override = false;
+                                    } else {
+                                        let queued = tokio::time::timeout(
+                                            remaining,
+                                            rt.audio_tx.send(tail),
+                                        )
+                                        .await;
+                                        if !matches!(queued, Ok(Ok(()))) {
+                                            allow_override = false;
+                                            merge_warning(
+                                                &mut warning,
+                                                "ElevenLabs realtime could not queue final audio frame; using batch on stop.".into(),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+
+                            if allow_override {
+                                let remaining = finalize_budget
+                                    .checked_sub(finalize_started.elapsed())
+                                    .unwrap_or_default();
+                                if remaining.is_zero() {
+                                    allow_override = false;
+                                } else {
+                                    // Ask the uploader to drain queued frames (time-bounded).
+                                    let (tx, rx) = tokio::sync::oneshot::channel();
+                                    if rt
+                                        .uploader_cmd_tx
+                                        .send(RealtimeUploaderCmd::Drain { respond_to: tx })
+                                        .await
+                                        .is_err()
+                                    {
+                                        allow_override = false;
+                                        merge_warning(
+                                            &mut warning,
+                                            "ElevenLabs realtime uploader is not running; using batch on stop.".into(),
+                                        );
+                                    } else {
+                                        let drain_start = Instant::now();
+                                        match tokio::time::timeout(remaining, rx).await {
+                                            Ok(Ok(ok)) if ok => {}
+                                            Ok(Ok(_)) => {
+                                                allow_override = false;
+                                                merge_warning(
+                                                    &mut warning,
+                                                    "ElevenLabs realtime uploader failed while draining; using batch on stop.".into(),
+                                                );
+                                            }
+                                            Ok(Err(_)) => {
+                                                allow_override = false;
+                                                merge_warning(
+                                                    &mut warning,
+                                                    "ElevenLabs realtime uploader drain cancelled; using batch on stop.".into(),
+                                                );
+                                            }
+                                            Err(_) => {
+                                                allow_override = false;
+                                                merge_warning(
+                                                    &mut warning,
+                                                    "ElevenLabs realtime could not catch up in 2s; using batch on stop.".into(),
+                                                );
+                                            }
+                                        }
+
+                                        log::info!(
+                                            "ElevenLabs realtime drain finished: ok={allow_override} elapsed_ms={}",
+                                            drain_start.elapsed().as_millis()
+                                        );
+                                    }
+                                }
+                            }
+
+                            if allow_override {
+                                let remaining = finalize_budget
+                                    .checked_sub(finalize_started.elapsed())
+                                    .unwrap_or_default();
+                                if remaining.is_zero() {
+                                    allow_override = false;
+                                } else {
+                                    log::info!("ElevenLabs realtime finalize started");
+                                    match tokio::time::timeout(remaining, rt.handle.finalize()).await {
+                                        Ok(Ok(t)) => {
+                                            if let Some(t) =
+                                                voicewin_core::stt::accept_transcript_override(t)
+                                            {
+                                                log::info!(
+                                                    "ElevenLabs realtime finalize ok; using transcript override (chars={})",
+                                                    t.trim().len()
+                                                );
+                                                transcript_override = t;
+                                                log::info!(
+                                                    "ElevenLabs realtime stop finished: used_override=true elapsed_ms={}",
+                                                    finalize_started.elapsed().as_millis()
+                                                );
+                                            } else {
+                                                let msg = "ElevenLabs realtime produced no text; using batch on stop.".to_string();
+                                                log::warn!("{msg}");
+                                                merge_warning(&mut warning, msg.clone());
+                                                controller
+                                                    .set_status_message(
+                                                        &app_handle,
+                                                        msg,
+                                                        Duration::from_millis(2500),
+                                                    )
+                                                    .await;
+                                            }
+                                        }
+                                        Ok(Err(e)) => {
+                                            let detail = rt
+                                                .last_error
+                                                .lock()
+                                                .ok()
+                                                .and_then(|g| g.clone())
+                                                .unwrap_or_else(|| e.to_string());
+                                            let msg = format!(
+                                                "ElevenLabs realtime failed; using batch on stop. ({detail})"
+                                            );
+                                            log::warn!("{msg}");
+                                            merge_warning(&mut warning, msg.clone());
+                                            controller
+                                                .set_status_message(
+                                                    &app_handle,
+                                                    msg,
+                                                    Duration::from_millis(2500),
+                                                )
+                                                .await;
+                                        }
+                                        Err(_) => {
+                                            let msg = "ElevenLabs realtime could not finalize in 2s; using batch on stop.".to_string();
+                                            log::warn!("{msg}");
+                                            merge_warning(&mut warning, msg.clone());
+                                            controller
+                                                .set_status_message(
+                                                    &app_handle,
+                                                    msg,
+                                                    Duration::from_millis(2500),
+                                                )
+                                                .await;
+                                        }
+                                    }
+                                }
+                            }
+
+                            if transcript_override.trim().is_empty() {
+                                log::info!(
+                                    "ElevenLabs realtime stop finished: used_override=false elapsed_ms={}",
+                                    finalize_started.elapsed().as_millis()
+                                );
+                            }
+
                             rt.receiver_task.abort();
+                            rt.uploader_task.abort();
                             rt.handle.shutdown().await;
                         }
 
@@ -1353,6 +1624,56 @@ fn preview_text(text: &str) -> String {
     trimmed.chars().take(MAX).collect::<String>() + "…"
 }
 
+// Aggregates variable-sized mic chunks into fixed-ish frames so:
+// - we drastically reduce per-message overhead (channel + encode + JSON)
+// - the bounded queue becomes time-based ("~N seconds" rather than "N chunks")
+//
+// This is intentionally simple and allocation-heavy; correctness + bounded memory first.
+#[derive(Debug, Default)]
+struct RealtimeFrameChunker {
+    buf: Vec<f32>,
+    start: usize,
+}
+
+impl RealtimeFrameChunker {
+    fn push(&mut self, chunk: &[f32], frame_samples: usize) -> Vec<Vec<f32>> {
+        if chunk.is_empty() || frame_samples == 0 {
+            return Vec::new();
+        }
+
+        self.buf.extend_from_slice(chunk);
+
+        let mut out = Vec::new();
+        while self.buf.len().saturating_sub(self.start) >= frame_samples {
+            let end = self.start + frame_samples;
+            out.push(self.buf[self.start..end].to_vec());
+            self.start = end;
+        }
+
+        // Avoid unbounded growth from a large `start` offset.
+        if self.start > 0 && (self.start >= frame_samples.saturating_mul(4) || self.start >= 8192) {
+            self.buf.drain(..self.start);
+            self.start = 0;
+        }
+
+        out
+    }
+
+    fn flush(&mut self) -> Option<Vec<f32>> {
+        let remaining = self.buf.len().saturating_sub(self.start);
+        if remaining == 0 {
+            self.buf.clear();
+            self.start = 0;
+            return None;
+        }
+
+        let out = self.buf[self.start..].to_vec();
+        self.buf.clear();
+        self.start = 0;
+        Some(out)
+    }
+}
+
 #[cfg(any(windows, target_os = "macos"))]
 fn pcm_s16le_from_f32(samples: &[f32]) -> Vec<u8> {
     // Convert mono float samples to PCM16 little-endian bytes for ElevenLabs realtime.
@@ -1397,6 +1718,7 @@ pub fn smooth_level(prev: f32, next: f32, dt: Duration) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::SessionController;
+    use super::RealtimeFrameChunker;
 
     #[tokio::test]
     async fn transition_gate_blocks_parallel_entries() {
@@ -1408,5 +1730,23 @@ mod tests {
 
         drop(gate);
         assert!(controller.try_acquire_transition().is_some());
+    }
+
+    #[test]
+    fn realtime_chunker_frames_and_flushes_tail() {
+        let mut c = RealtimeFrameChunker::default();
+
+        // Frame size 3.
+        let out1 = c.push(&[1.0, 2.0], 3);
+        assert!(out1.is_empty());
+
+        let out2 = c.push(&[3.0, 4.0, 5.0, 6.0, 7.0], 3);
+        assert_eq!(out2.len(), 2);
+        assert_eq!(out2[0], vec![1.0, 2.0, 3.0]);
+        assert_eq!(out2[1], vec![4.0, 5.0, 6.0]);
+
+        let tail = c.flush().unwrap();
+        assert_eq!(tail, vec![7.0]);
+        assert!(c.flush().is_none());
     }
 }

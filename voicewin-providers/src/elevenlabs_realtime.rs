@@ -9,7 +9,10 @@ use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 use url::Url;
 
 const WS_SEND_TIMEOUT: Duration = Duration::from_secs(3);
-const FINALIZE_FAST_PATH_DURATION: Duration = Duration::from_millis(450);
+// Finalize "fast path" waits for stop-time transcript updates.
+// Keep this long enough to capture late committed segments after the stop flush,
+// but still short compared to the overall stop-to-final budget.
+const FINALIZE_FAST_PATH_DURATION: Duration = Duration::from_millis(800);
 
 fn join_committed_and_partial(committed: &str, partial: &str) -> String {
     let c = committed.trim();
@@ -344,9 +347,11 @@ pub async fn spawn_realtime_session(
                             let silence = silence_pcm_s16le(sample_rate_hz, 120);
                             let msg = build_input_audio_chunk_message(&silence, sample_rate_hz, true, None);
 
+                            // IMPORTANT: send the stop flush on the audio lane so it cannot
+                            // overtake queued audio.
                             let sent = tokio::time::timeout(
                                 Duration::from_secs(1),
-                                out_ctrl_tx.send(Message::Text(msg.into())),
+                                out_audio_tx.send(Message::Text(msg.into())),
                             )
                             .await;
                             if !matches!(sent, Ok(Ok(()))) {
@@ -1031,6 +1036,82 @@ mod tests {
 
         let out = handle.finalize().await.unwrap();
         assert!(out.contains("final"));
+        handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn integration_ws_finalize_waits_for_late_stop_commit() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+
+            let _ = ws
+                .send(Message::Text(
+                    r#"{"message_type":"session_started","session_id":"s"}"#.into(),
+                ))
+                .await;
+
+            let mut sent_hello = false;
+            while let Some(Ok(msg)) = ws.next().await {
+                if let Message::Text(txt) = msg {
+                    if txt.contains("\"commit\":true") {
+                        // Simulate a late stop-time commit arriving after the client's
+                        // "fast finalize" window.
+                        tokio::time::sleep(Duration::from_millis(700)).await;
+                        let _ = ws
+                            .send(Message::Text(
+                                r#"{"message_type":"committed_transcript","text":"tail"}"#
+                                    .into(),
+                            ))
+                            .await;
+                        break;
+                    }
+
+                    if !sent_hello {
+                        sent_hello = true;
+                        let _ = ws
+                            .send(Message::Text(
+                                r#"{"message_type":"committed_transcript","text":"hello"}"#
+                                    .into(),
+                            ))
+                            .await;
+                    }
+                }
+            }
+        });
+
+        let cfg = ElevenLabsRealtimeConfig {
+            ws_url: Url::parse(&format!("ws://{addr}/v1/speech-to-text/realtime")).unwrap(),
+            api_key: "k".into(),
+            model_id: "scribe_v2".into(),
+            language_code: None,
+            sample_rate_hz: 16_000,
+            commit_strategy: "vad".into(),
+            vad: None,
+            connect_timeout: Duration::from_secs(2),
+            finalize_timeout: Duration::from_secs(5),
+        };
+
+        let (handle, mut events) = spawn_realtime_session(cfg).await.unwrap();
+        let _ = events.recv().await; // session_started
+
+        // Ensure we have some committed transcript before stopping.
+        assert!(handle.send_audio_chunk(vec![0u8; 8]).await);
+        loop {
+            if let Some(RealtimeEvent::LiveText { committed, .. }) = events.recv().await {
+                if committed.contains("hello") {
+                    break;
+                }
+            }
+        }
+
+        // Finalize must include late stop-time committed text.
+        let out = handle.finalize().await.unwrap();
+        assert!(out.contains("tail"), "finalize output missing late tail: {out:?}");
+
         handle.shutdown().await;
     }
 
