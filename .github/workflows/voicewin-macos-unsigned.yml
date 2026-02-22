@@ -10,9 +10,9 @@ jobs:
   build-macos-unsigned:
     runs-on: macos-14
     env:
-      # On Apple Silicon runners, whisper-rs/ggml native CPU probing can produce
-      # mixed i8mm flags that fail C compilation. Force non-native ggml flags.
-      CMAKE_ARGS: -DGGML_NATIVE=OFF
+      # whisper-rs-sys vendors ggml. Setting SOURCE_DATE_EPOCH makes ggml default
+      # to non-native CPU flags, avoiding i8mm/native probe mismatches on CI.
+      SOURCE_DATE_EPOCH: "1"
 
     steps:
       - name: Checkout

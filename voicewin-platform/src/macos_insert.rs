@@ -19,7 +19,7 @@ use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{msg_send, runtime::ProtocolObject};
+use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{
     NSPasteboard, NSPasteboardItem, NSPasteboardType, NSPasteboardTypeString, NSPasteboardWriting,
 };
@@ -56,8 +56,7 @@ fn snapshot_pasteboard(pasteboard: &NSPasteboard) -> Vec<PasteboardItemSnapshot>
     let mut total = 0usize;
 
     // `pasteboardItems` may be nil.
-    let items: Option<Retained<NSArray<NSPasteboardItem>>> =
-        unsafe { pasteboard.pasteboardItems() };
+    let items: Option<Retained<NSArray<NSPasteboardItem>>> = pasteboard.pasteboardItems();
     let Some(items) = items else {
         return out;
     };
@@ -66,20 +65,18 @@ fn snapshot_pasteboard(pasteboard: &NSPasteboard) -> Vec<PasteboardItemSnapshot>
         let mut entry = PasteboardItemSnapshot { types: Vec::new() };
 
         // Each item has a list of types.
-        let types: Retained<NSArray<NSPasteboardType>> = unsafe { item.types() };
+        let types: Retained<NSArray<NSPasteboardType>> = item.types();
         for t in types.iter() {
-            // Convert NSPasteboardType (NSString newtype) to Rust string.
-            let ty: Retained<NSString> = unsafe { msg_send![t, copy] };
-            let ty_str = ty.to_string();
+            // NSPasteboardType is a typedef of NSString.
+            let ty_str = t.to_string();
 
             // Fetch raw data for this type.
-            let data: Option<Retained<NSData>> = unsafe { item.dataForType(&*t) };
+            let data: Option<Retained<NSData>> = item.dataForType(t);
             let Some(data) = data else {
                 continue;
             };
 
-            let bytes = data.bytes();
-            let len = data.length();
+            let len = data.length() as usize;
             if len == 0 {
                 continue;
             }
@@ -89,9 +86,7 @@ fn snapshot_pasteboard(pasteboard: &NSPasteboard) -> Vec<PasteboardItemSnapshot>
                 return Vec::new();
             }
 
-            // SAFETY: NSData guarantees `bytes` is valid for `length` bytes.
-            let slice = unsafe { std::slice::from_raw_parts(bytes.cast::<u8>(), len) };
-            entry.types.push((ty_str, slice.to_vec()));
+            entry.types.push((ty_str, data.to_vec()));
             total += len;
         }
 
@@ -104,9 +99,7 @@ fn snapshot_pasteboard(pasteboard: &NSPasteboard) -> Vec<PasteboardItemSnapshot>
 }
 
 fn restore_pasteboard(pasteboard: &NSPasteboard, snapshot: &[PasteboardItemSnapshot]) {
-    unsafe {
-        pasteboard.clearContents();
-    }
+    pasteboard.clearContents();
 
     if snapshot.is_empty() {
         return;
@@ -116,13 +109,13 @@ fn restore_pasteboard(pasteboard: &NSPasteboard, snapshot: &[PasteboardItemSnaps
     let mut items: Vec<Retained<NSPasteboardItem>> = Vec::with_capacity(snapshot.len());
 
     for item in snapshot {
-        let pb_item = unsafe { NSPasteboardItem::new() };
+        let pb_item = NSPasteboardItem::new();
 
         for (ty, bytes) in &item.types {
             // NSPasteboardType is a typedef of NSString.
             let ns_ty = NSString::from_str(ty);
             let ns_data = NSData::with_bytes(bytes);
-            let _ok: bool = unsafe { pb_item.setData_forType(&ns_data, &ns_ty) };
+            let _ok: bool = pb_item.setData_forType(&ns_data, &ns_ty);
         }
 
         items.push(pb_item);
@@ -153,26 +146,26 @@ fn post_cmd_v() -> anyhow::Result<()> {
 
     // Cmd down
     let cmd_down = CGEvent::new_keyboard_event(src.clone(), cmd_key, true)
-        .ok_or_else(|| anyhow::anyhow!("failed to create cmd down event"))?;
+        .map_err(|_| anyhow::anyhow!("failed to create cmd down event"))?;
     cmd_down.set_flags(flags);
     cmd_down.post(CGEventTapLocation::HID);
 
     // V down
     let v_down = CGEvent::new_keyboard_event(src.clone(), v_key, true)
-        .ok_or_else(|| anyhow::anyhow!("failed to create v down event"))?;
+        .map_err(|_| anyhow::anyhow!("failed to create v down event"))?;
     v_down.set_flags(flags);
     v_down.post(CGEventTapLocation::HID);
 
     // V up
     let v_up = CGEvent::new_keyboard_event(src.clone(), v_key, false)
-        .ok_or_else(|| anyhow::anyhow!("failed to create v up event"))?;
+        .map_err(|_| anyhow::anyhow!("failed to create v up event"))?;
     v_up.set_flags(flags);
     v_up.post(CGEventTapLocation::HID);
 
     // Cmd up (no flags)
     flags.remove(CGEventFlags::CGEventFlagCommand);
     let cmd_up = CGEvent::new_keyboard_event(src, cmd_key, false)
-        .ok_or_else(|| anyhow::anyhow!("failed to create cmd up event"))?;
+        .map_err(|_| anyhow::anyhow!("failed to create cmd up event"))?;
     cmd_up.set_flags(flags);
     cmd_up.post(CGEventTapLocation::HID);
 
@@ -186,11 +179,11 @@ fn post_enter() -> anyhow::Result<()> {
     let enter_key: u16 = 0x24;
 
     let down = CGEvent::new_keyboard_event(src.clone(), enter_key, true)
-        .ok_or_else(|| anyhow::anyhow!("failed to create enter down event"))?;
+        .map_err(|_| anyhow::anyhow!("failed to create enter down event"))?;
     down.post(CGEventTapLocation::HID);
 
     let up = CGEvent::new_keyboard_event(src, enter_key, false)
-        .ok_or_else(|| anyhow::anyhow!("failed to create enter up event"))?;
+        .map_err(|_| anyhow::anyhow!("failed to create enter up event"))?;
     up.post(CGEventTapLocation::HID);
 
     Ok(())
@@ -211,12 +204,11 @@ pub fn paste_text_via_clipboard(text: &str, mode: InsertMode) -> anyhow::Result<
     let snapshot = snapshot_pasteboard(&pasteboard);
 
     // Write our text.
-    unsafe {
-        pasteboard.clearContents();
-    }
+    pasteboard.clearContents();
 
     let ns_text = NSString::from_str(text);
-    let _ = pasteboard.setString_forType(&ns_text, NSPasteboardTypeString);
+    let text_type: &NSPasteboardType = unsafe { NSPasteboardTypeString };
+    let _ = pasteboard.setString_forType(&ns_text, text_type);
     let after_write_change = pasteboard.changeCount();
 
     // Small delay to ensure the target app sees clipboard update.

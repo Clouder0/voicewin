@@ -12,11 +12,10 @@ use objc2_app_kit::{NSRunningApplication, NSWorkspace};
 use voicewin_core::types::AppIdentity;
 
 pub fn get_foreground_app_identity() -> anyhow::Result<AppIdentity> {
-    // SAFETY: Accessing AppKit APIs is generally expected on the main thread,
-    // but in practice reading `frontmostApplication` is commonly done off-main.
-    // If this causes issues, we can move it behind a main-thread dispatcher.
+    // Accessing AppKit APIs is generally expected on the main thread, but in
+    // practice reading `frontmostApplication` is commonly done off-main.
     let app: Option<Retained<NSRunningApplication>> =
-        unsafe { NSWorkspace::sharedWorkspace().frontmostApplication() };
+        NSWorkspace::sharedWorkspace().frontmostApplication();
 
     let mut out = AppIdentity::new();
     let Some(app) = app else {
@@ -24,11 +23,11 @@ pub fn get_foreground_app_identity() -> anyhow::Result<AppIdentity> {
     };
 
     // Prefer bundle identifier as an exe_path-like stable identifier.
-    if let Some(bundle_id) = unsafe { app.bundleIdentifier() } {
+    if let Some(bundle_id) = app.bundleIdentifier() {
         out = out.with_exe_path(bundle_id.to_string());
     }
 
-    if let Some(name) = unsafe { app.localizedName() } {
+    if let Some(name) = app.localizedName() {
         out = out.with_process_name(name.to_string());
     }
 
