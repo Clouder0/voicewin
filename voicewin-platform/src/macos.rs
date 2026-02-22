@@ -1,6 +1,9 @@
 //! macOS platform implementations.
 
+#[path = "macos_foreground.rs"]
 mod macos_foreground;
+
+#[path = "macos_insert.rs"]
 mod macos_insert;
 
 use voicewin_core::types::{AppIdentity, InsertMode};
