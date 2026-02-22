@@ -71,7 +71,7 @@ fn snapshot_pasteboard(pasteboard: &NSPasteboard) -> Vec<PasteboardItemSnapshot>
             let ty_str = t.to_string();
 
             // Fetch raw data for this type.
-            let data: Option<Retained<NSData>> = item.dataForType(t);
+            let data: Option<Retained<NSData>> = item.dataForType(&t);
             let Some(data) = data else {
                 continue;
             };
