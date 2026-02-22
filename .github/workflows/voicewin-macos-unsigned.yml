@@ -8,7 +8,11 @@ on:
 
 jobs:
   build-macos-unsigned:
-    runs-on: macos-latest
+    runs-on: macos-14
+    env:
+      # On Apple Silicon runners, whisper-rs/ggml native CPU probing can produce
+      # mixed i8mm flags that fail C compilation. Force non-native ggml flags.
+      CMAKE_ARGS: -DGGML_NATIVE=OFF
 
     steps:
       - name: Checkout
@@ -37,6 +41,9 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Add Apple Silicon Rust target
+        run: rustup target add aarch64-apple-darwin
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -60,13 +67,39 @@ jobs:
 
       - name: Build Tauri app (unsigned macOS bundle)
         working-directory: voicewin-tauri
-        run: cargo tauri build
+        run: cargo tauri build --target aarch64-apple-darwin
+
+      - name: Verify app binary is arm64
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          apps=(voicewin-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app)
+          if [ ${#apps[@]} -eq 0 ]; then
+            echo "ERROR: No .app bundle found under aarch64 target output." >&2
+            exit 1
+          fi
+
+          app="${apps[0]}"
+          binaries=("$app"/Contents/MacOS/*)
+          if [ ${#binaries[@]} -eq 0 ]; then
+            echo "ERROR: No executable found inside $app/Contents/MacOS." >&2
+            exit 1
+          fi
+
+          file_output="$(file "${binaries[0]}")"
+          echo "$file_output"
+          if [[ "$file_output" != *"arm64"* ]]; then
+            echo "ERROR: Built app binary is not arm64." >&2
+            exit 1
+          fi
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: VoiceWin-macos-unsigned
           path: |
-            voicewin-tauri/src-tauri/target/**/release/bundle/dmg/*.dmg
-            voicewin-tauri/src-tauri/target/**/release/bundle/macos/*.app
+            voicewin-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+            voicewin-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app
           if-no-files-found: error
