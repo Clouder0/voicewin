@@ -13,6 +13,9 @@ jobs:
       # whisper-rs-sys vendors ggml. Setting SOURCE_DATE_EPOCH makes ggml default
       # to non-native CPU flags, avoiding i8mm/native probe mismatches on CI.
       SOURCE_DATE_EPOCH: "1"
+      # ggml-backend-reg.cpp in current whisper-rs-sys needs std::filesystem
+      # APIs gated behind macOS 10.15+; Apple Silicon also requires macOS 11+.
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
 
     steps:
       - name: Checkout
@@ -43,6 +46,20 @@ jobs:
 
       - name: Add Apple Silicon Rust target
         run: rustup target add aarch64-apple-darwin
+
+      - name: Verify deployment target configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET"
+          python - <<'PY'
+          import json
+          conf = json.load(open('voicewin-tauri/src-tauri/tauri.conf.json', 'r', encoding='utf-8'))
+          version = conf['bundle']['macOS'].get('minimumSystemVersion')
+          print(f"tauri minimumSystemVersion={version}")
+          if version != '11.0':
+              raise SystemExit('tauri minimumSystemVersion must be 11.0 for arm64 builds')
+          PY
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2

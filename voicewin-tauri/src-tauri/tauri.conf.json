@@ -39,7 +39,8 @@
       "resources/models/bootstrap.bin"
     ],
     "macOS": {
-      "infoPlist": "Info.plist"
+      "infoPlist": "Info.plist",
+      "minimumSystemVersion": "11.0"
     },
     "windows": {
       "nsis": {
