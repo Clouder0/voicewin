@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import type { AppConfig, PowerModeProfile } from '../lib/types';
+import type { AppConfig, AppMatcher, PowerModeProfile } from '../lib/types';
 import { decodePowerModeProfile, encodePowerModeProfile } from '../lib/types';
 
 type ForegroundAppInfo = {
@@ -18,6 +18,10 @@ function newProfile(): PowerModeProfile {
     matchers: [{ kind: 'ProcessNameEquals', value: '' }],
     overrides: {},
   };
+}
+
+function processNameMatcher(value: string): AppMatcher {
+  return { kind: 'ProcessNameEquals', value };
 }
 
 export function ProfilesPage() {
@@ -207,7 +211,7 @@ export function ProfilesPage() {
                     const next = profiles.map((p) => {
                       if (p.id !== selected.id) return p;
                       const others = p.matchers.filter((m) => m.kind !== 'ProcessNameEquals');
-                      return { ...p, matchers: [...others, { kind: 'ProcessNameEquals', value }] };
+                      return { ...p, matchers: [...others, processNameMatcher(value)] };
                     });
                     setProfiles(next);
                   }}
@@ -229,7 +233,7 @@ export function ProfilesPage() {
                       const next = profiles.map((p) => {
                         if (p.id !== selected.id) return p;
                         const others = p.matchers.filter((m) => m.kind !== 'ProcessNameEquals');
-                        return { ...p, matchers: [...others, { kind: 'ProcessNameEquals', value: proc }] };
+                        return { ...p, matchers: [...others, processNameMatcher(proc)] };
                       });
 
                       setProfiles(next);

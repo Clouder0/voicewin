@@ -38,8 +38,19 @@ pub fn user_facing_audio_error(e: &voicewin_audio::AudioCaptureError) -> String 
 
 use voicewin_runtime::runtime_engine::build_engine_from_config;
 use voicewin_runtime::secrets::{
-    SecretKey, configure_secret_store_path, delete_secret, get_secret, set_secret,
+    configure_secret_store_path, delete_secret, get_secret, set_secret, SecretKey,
 };
+
+fn normalize_microphone_device(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+pub fn microphone_device_changed(previous: Option<&str>, next: Option<&str>) -> bool {
+    normalize_microphone_device(previous) != normalize_microphone_device(next)
+}
 
 #[derive(Clone)]
 pub struct AppService {
@@ -117,6 +128,14 @@ impl AppService {
 
         let _ = r.stop();
         Ok(())
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    pub async fn invalidate_recorder(&self) {
+        let mut recorder = self.recorder.lock().await;
+        if let Some(r) = recorder.take() {
+            let _ = r.close();
+        }
     }
 
     #[cfg(any(windows, target_os = "macos"))]
@@ -321,6 +340,28 @@ mod tests {
     use voicewin_core::enhancement::{PromptMode, PromptTemplate};
     use voicewin_core::power_mode::GlobalDefaults;
     use voicewin_core::types::{InsertMode, PromptId};
+
+    #[test]
+    fn microphone_change_is_detected() {
+        assert!(microphone_device_changed(
+            Some("Built-in Mic"),
+            Some("USB Audio")
+        ));
+    }
+
+    #[test]
+    fn unchanged_microphone_is_not_detected_as_change() {
+        assert!(!microphone_device_changed(
+            Some("Built-in Mic"),
+            Some("Built-in Mic")
+        ));
+    }
+
+    #[test]
+    fn empty_names_are_treated_as_none() {
+        assert!(!microphone_device_changed(Some(" "), None));
+        assert!(microphone_device_changed(None, Some("USB Audio")));
+    }
 
     #[tokio::test]
     async fn service_roundtrip_and_run_session_smoke() {

@@ -424,6 +424,12 @@ async fn set_config(
         .await
         .map_err(|e| e.to_string())?;
 
+    #[cfg(any(windows, target_os = "macos"))]
+    let previous_microphone = svc
+        .load_config()
+        .ok()
+        .and_then(|existing| existing.defaults.microphone_device);
+
     // Normalize known model filenames in our app models dir.
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     if let Some(normalized) =
@@ -437,7 +443,19 @@ async fn set_config(
 
     validate_config(&cfg)?;
 
-    svc.save_config(&cfg).map_err(|e| e.to_string())
+    svc.save_config(&cfg).map_err(|e| e.to_string())?;
+
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        if voicewin_appcore::service::microphone_device_changed(
+            previous_microphone.as_deref(),
+            cfg.defaults.microphone_device.as_deref(),
+        ) {
+            svc.invalidate_recorder().await;
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(serde::Serialize)]

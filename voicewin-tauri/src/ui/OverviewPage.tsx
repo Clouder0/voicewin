@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
+import { keydownToHotkey } from './hotkey';
+
 type HotkeyState = {
   hotkey: string;
   error?: string | null;
@@ -17,39 +19,6 @@ function splitHotkey(hotkey: string): string[] {
     .split('+')
     .map((p) => p.trim())
     .filter((p) => p.length > 0);
-}
-
-function isModifierKey(key: string): boolean {
-  const k = key.toLowerCase();
-  return k === 'shift' || k === 'control' || k === 'ctrl' || k === 'alt' || k === 'meta' || k === 'super';
-}
-
-function keydownToHotkey(e: KeyboardEvent): { hotkey: string | null; error?: string } {
-  const mods: string[] = [];
-  if (e.ctrlKey) mods.push('Ctrl');
-  if (e.shiftKey) mods.push('Shift');
-  if (e.altKey) mods.push('Alt');
-  if (e.metaKey) mods.push('Super');
-
-  const keyRaw = e.key;
-  if (!keyRaw || isModifierKey(keyRaw)) {
-    return { hotkey: null };
-  }
-
-  let key: string;
-  if (e.code === 'Space' || keyRaw === ' ') {
-    key = 'Space';
-  } else if (keyRaw.length === 1) {
-    key = /[a-z]/i.test(keyRaw) ? keyRaw.toUpperCase() : keyRaw;
-  } else {
-    key = keyRaw;
-  }
-
-  if (mods.length === 0) {
-    return { hotkey: null, error: 'Include at least one modifier (Ctrl/Alt/Shift).' };
-  }
-
-  return { hotkey: [...mods, key].join('+') };
 }
 
 function displayHotkeyPart(part: string, isMac: boolean): string {
