@@ -86,29 +86,63 @@ jobs:
         working-directory: voicewin-tauri
         run: cargo tauri build --target aarch64-apple-darwin
 
-      - name: Verify app binary is arm64
+      - name: Verify build output is arm64
         shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
 
-          apps=(voicewin-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app)
-          if [ ${#apps[@]} -eq 0 ]; then
-            echo "ERROR: No .app bundle found under aarch64 target output." >&2
+          apps=(
+            voicewin-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app
+            voicewin-tauri/src-tauri/target/release/bundle/macos/*.app
+          )
+
+          dmgs=(
+            voicewin-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+            voicewin-tauri/src-tauri/target/release/bundle/dmg/*.dmg
+          )
+
+          candidate=""
+          if [ ${#apps[@]} -gt 0 ]; then
+            app="${apps[0]}"
+            for bin in "$app"/Contents/MacOS/*; do
+              if [ -f "$bin" ]; then
+                candidate="$bin"
+                break
+              fi
+            done
+          fi
+
+          if [ -z "$candidate" ]; then
+            bins=(
+              voicewin-tauri/src-tauri/target/aarch64-apple-darwin/release/*
+              voicewin-tauri/src-tauri/target/release/*
+            )
+            for bin in "${bins[@]}"; do
+              if [ -f "$bin" ] && [ -x "$bin" ]; then
+                candidate="$bin"
+                break
+              fi
+            done
+          fi
+
+          if [ -z "$candidate" ]; then
+            echo "ERROR: Could not locate built executable for architecture check." >&2
+            ls -la voicewin-tauri/src-tauri/target || true
+            ls -la voicewin-tauri/src-tauri/target/aarch64-apple-darwin/release || true
+            ls -la voicewin-tauri/src-tauri/target/release || true
             exit 1
           fi
 
-          app="${apps[0]}"
-          binaries=("$app"/Contents/MacOS/*)
-          if [ ${#binaries[@]} -eq 0 ]; then
-            echo "ERROR: No executable found inside $app/Contents/MacOS." >&2
-            exit 1
-          fi
-
-          file_output="$(file "${binaries[0]}")"
+          file_output="$(file "$candidate")"
           echo "$file_output"
           if [[ "$file_output" != *"arm64"* ]]; then
             echo "ERROR: Built app binary is not arm64." >&2
+            exit 1
+          fi
+
+          if [ ${#apps[@]} -eq 0 ] && [ ${#dmgs[@]} -eq 0 ]; then
+            echo "ERROR: No macOS bundle artifacts (.app or .dmg) found." >&2
             exit 1
           fi
 
@@ -119,4 +153,6 @@ jobs:
           path: |
             voicewin-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
             voicewin-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app
+            voicewin-tauri/src-tauri/target/release/bundle/dmg/*.dmg
+            voicewin-tauri/src-tauri/target/release/bundle/macos/*.app
           if-no-files-found: error
