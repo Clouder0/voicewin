@@ -1362,6 +1362,42 @@ async fn open_macos_accessibility_settings() -> Result<(), String> {
     }
 }
 
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+struct MacosPermissionsStatus {
+    accessibility_trusted: bool,
+}
+
+#[tauri::command]
+async fn get_macos_permissions_status() -> Result<MacosPermissionsStatus, String> {
+    #[cfg(target_os = "macos")]
+    {
+        Ok(MacosPermissionsStatus {
+            accessibility_trusted: voicewin_platform::macos::accessibility_trusted(),
+        })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("macOS only".into())
+    }
+}
+
+#[tauri::command]
+async fn prompt_macos_accessibility_permission() -> Result<MacosPermissionsStatus, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let trusted = voicewin_platform::macos::prompt_accessibility_permission();
+        Ok(MacosPermissionsStatus {
+            accessibility_trusted: trusted,
+        })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("macOS only".into())
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[tauri::command]
 async fn open_macos_microphone_settings() -> Result<(), String> {
@@ -1467,6 +1503,8 @@ fn main() {
             overlay_ready,
             overlay_dismiss,
             show_main_window,
+            get_macos_permissions_status,
+            prompt_macos_accessibility_permission,
             #[cfg(target_os = "macos")]
             open_macos_accessibility_settings,
             #[cfg(target_os = "macos")]

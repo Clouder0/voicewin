@@ -153,3 +153,13 @@ commands.allow = ["open_macos_accessibility_settings"]
 identifier = "allow-open-macos-microphone-settings"
 description = "Enables the open_macos_microphone_settings command without any pre-configured scope."
 commands.allow = ["open_macos_microphone_settings"]
+
+[[permission]]
+identifier = "allow-get-macos-permissions-status"
+description = "Enables the get_macos_permissions_status command without any pre-configured scope."
+commands.allow = ["get_macos_permissions_status"]
+
+[[permission]]
+identifier = "allow-prompt-macos-accessibility-permission"
+description = "Enables the prompt_macos_accessibility_permission command without any pre-configured scope."
+commands.allow = ["prompt_macos_accessibility_permission"]

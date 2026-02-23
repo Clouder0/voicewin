@@ -49,3 +49,13 @@ impl Inserter for MacosInserter {
         macos_insert::paste_text_via_clipboard(text, mode)
     }
 }
+
+/// Returns whether the app is trusted for Accessibility (required for synthetic paste events).
+pub fn accessibility_trusted() -> bool {
+    macos_insert::is_accessibility_trusted()
+}
+
+/// Best-effort: triggers the system prompt for Accessibility trust.
+pub fn prompt_accessibility_permission() -> bool {
+    macos_insert::prompt_accessibility_permission()
+}

@@ -231,6 +231,12 @@
           "markdownDescription": "Enables the get_history command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_macos_permissions_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-macos-permissions-status",
+          "markdownDescription": "Enables the get_macos_permissions_status command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_model_status command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-model-status",
@@ -313,6 +319,12 @@
           "type": "string",
           "const": "allow-overlay-set-size",
           "markdownDescription": "Enables the overlay_set_size command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the prompt_macos_accessibility_permission command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-prompt-macos-accessibility-permission",
+          "markdownDescription": "Enables the prompt_macos_accessibility_permission command without any pre-configured scope."
         },
         {
           "description": "Enables the set_active_model command without any pre-configured scope.",

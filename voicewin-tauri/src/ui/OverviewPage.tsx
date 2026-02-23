@@ -21,6 +21,10 @@ type MicrophoneDevice = {
   is_selected: boolean;
 };
 
+type MacosPermissionsStatus = {
+  accessibility_trusted: boolean;
+};
+
 function splitHotkey(hotkey: string): string[] {
   return hotkey
     .split('+')
@@ -101,10 +105,30 @@ export function OverviewPage() {
   const [selectedMicName, setSelectedMicName] = useState<string | null>(null);
   const [selectedMicId, setSelectedMicId] = useState<string | null>(null);
 
+  // macOS-only: required for auto-paste (synthetic Cmd+V).
+  const [accessibilityTrusted, setAccessibilityTrusted] = useState<boolean | null>(null);
+
   const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
 
   useEffect(() => {
     let unlisten: null | (() => void) = null;
+
+    const refreshAccessibilityTrusted = async () => {
+      // Only relevant on macOS.
+      if (!(typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent))) return;
+
+      try {
+        const { isTauri, invoke } = await import('@tauri-apps/api/core');
+        if (!isTauri()) return;
+
+        const status = await invoke<MacosPermissionsStatus>('get_macos_permissions_status');
+        if (typeof status?.accessibility_trusted === 'boolean') {
+          setAccessibilityTrusted(status.accessibility_trusted);
+        }
+      } catch {
+        // Best-effort: older builds may not expose this command.
+      }
+    };
 
     async function start() {
       try {
@@ -115,6 +139,9 @@ export function OverviewPage() {
         // Tauri v2's JS API no longer exposes `@tauri-apps/api/os`, so we use a
         // simple UA sniff (good enough for modifier label display).
         setIsMac(typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent));
+
+        // macOS permissions
+        await refreshAccessibilityTrusted();
 
         // Hotkey
         try {
@@ -165,8 +192,23 @@ export function OverviewPage() {
 
     void start();
 
+    const onFocus = () => {
+      void refreshAccessibilityTrusted();
+    };
+
+    const onVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        void refreshAccessibilityTrusted();
+      }
+    };
+
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+
     return () => {
       if (unlisten) unlisten();
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, []);
 
@@ -252,6 +294,93 @@ export function OverviewPage() {
       <div className="vw-type-caption" style={{ marginTop: 'var(--space-8)', textAlign: 'center' }}>
         Selected microphone: {selectedMicName ?? 'System Default'}
       </div>
+
+      {isMac ? (
+        <div className="vw-card" style={{ marginTop: 'var(--space-12)', padding: 'var(--space-12)' }}>
+          <div className="vw-type-bodyStrong">Auto-Paste (Accessibility)</div>
+          <div
+            className="vw-type-caption"
+            style={{
+              marginTop: 'var(--space-8)',
+              color:
+                accessibilityTrusted === null
+                  ? 'var(--text-secondary)'
+                  : accessibilityTrusted
+                    ? 'var(--color-success-fg)'
+                    : 'var(--color-danger-fg)',
+            }}
+          >
+            {accessibilityTrusted === null
+              ? 'Checking…'
+              : accessibilityTrusted
+                ? 'Enabled'
+                : 'Not enabled (auto-paste disabled)'}
+          </div>
+
+          {accessibilityTrusted === false ? (
+            <>
+              <div className="vw-type-caption" style={{ marginTop: 'var(--space-8)' }}>
+                VoiceWin can still copy your transcript to the clipboard; press Cmd+V to paste.
+              </div>
+
+              <div style={{ display: 'flex', gap: 'var(--space-12)', marginTop: 'var(--space-12)', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="vw-button vw-button--primary"
+                  aria-label="Enable Accessibility"
+                  onClick={async () => {
+                    try {
+                      const { invoke } = await import('@tauri-apps/api/core');
+                      // Best-effort: triggers the macOS system prompt.
+                      await invoke('prompt_macos_accessibility_permission');
+                    } catch {
+                      // ignore
+                    }
+
+                    try {
+                      const { invoke } = await import('@tauri-apps/api/core');
+                      await invoke('open_macos_accessibility_settings');
+                    } catch {
+                      // ignore
+                    }
+
+                    // Refresh status after the user potentially toggled the setting.
+                    try {
+                      const { invoke } = await import('@tauri-apps/api/core');
+                      const status = await invoke<MacosPermissionsStatus>('get_macos_permissions_status');
+                      if (typeof status?.accessibility_trusted === 'boolean') {
+                        setAccessibilityTrusted(status.accessibility_trusted);
+                      }
+                    } catch {
+                      // ignore
+                    }
+                  }}
+                >
+                  Enable Accessibility…
+                </button>
+
+                <button
+                  type="button"
+                  className="vw-button vw-button--secondary"
+                  onClick={async () => {
+                    try {
+                      const { invoke } = await import('@tauri-apps/api/core');
+                      const status = await invoke<MacosPermissionsStatus>('get_macos_permissions_status');
+                      if (typeof status?.accessibility_trusted === 'boolean') {
+                        setAccessibilityTrusted(status.accessibility_trusted);
+                      }
+                    } catch {
+                      // ignore
+                    }
+                  }}
+                >
+                  Re-check
+                </button>
+              </div>
+            </>
+          ) : null}
+        </div>
+      ) : null}
 
       {micPickerOpen ? (
         <div className="vw-card" style={{ marginTop: 'var(--space-12)', padding: 'var(--space-12)' }}>

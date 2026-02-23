@@ -56,11 +56,22 @@ unsafe extern "C" {
     static kTISCategoryKeyboardInputSource: CFStringRef;
 }
 
-fn is_accessibility_trusted() -> bool {
+pub(super) fn is_accessibility_trusted() -> bool {
     // Mirror enigo's approach: AXIsProcessTrustedWithOptions({ prompt: false }).
     unsafe {
         let key = CFString::wrap_under_create_rule(kAXTrustedCheckOptionPrompt.cast());
         let value = core_foundation::boolean::CFBoolean::false_value();
+        let options = CFDictionary::from_CFType_pairs(&[(key, value)]);
+        AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef().cast())
+    }
+}
+
+pub(super) fn prompt_accessibility_permission() -> bool {
+    // Trigger the macOS system prompt (best-effort). The return value reflects
+    // the current trust state; it may remain false until the user enables it.
+    unsafe {
+        let key = CFString::wrap_under_create_rule(kAXTrustedCheckOptionPrompt.cast());
+        let value = core_foundation::boolean::CFBoolean::true_value();
         let options = CFDictionary::from_CFType_pairs(&[(key, value)]);
         AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef().cast())
     }
@@ -171,14 +182,14 @@ struct PasteboardItemSnapshot {
 
 const SNAPSHOT_MAX_TOTAL_BYTES: usize = 8 * 1024 * 1024;
 
-fn snapshot_pasteboard(pasteboard: &NSPasteboard) -> Vec<PasteboardItemSnapshot> {
-    let mut out = Vec::new();
+fn snapshot_pasteboard(pasteboard: &NSPasteboard) -> Option<Vec<PasteboardItemSnapshot>> {
+    let mut out: Vec<PasteboardItemSnapshot> = Vec::new();
     let mut total = 0usize;
 
     // `pasteboardItems` may be nil.
     let items: Option<Retained<NSArray<NSPasteboardItem>>> = pasteboard.pasteboardItems();
     let Some(items) = items else {
-        return out;
+        return Some(out);
     };
 
     for item in items.iter() {
@@ -203,7 +214,7 @@ fn snapshot_pasteboard(pasteboard: &NSPasteboard) -> Vec<PasteboardItemSnapshot>
 
             if total.saturating_add(len) > SNAPSHOT_MAX_TOTAL_BYTES {
                 // Too large; don't attempt "full" restoration.
-                return Vec::new();
+                return None;
             }
 
             entry.types.push((ty_str, data.to_vec()));
@@ -215,7 +226,7 @@ fn snapshot_pasteboard(pasteboard: &NSPasteboard) -> Vec<PasteboardItemSnapshot>
         }
     }
 
-    out
+    Some(out)
 }
 
 fn restore_pasteboard(pasteboard: &NSPasteboard, snapshot: &[PasteboardItemSnapshot]) {
@@ -310,18 +321,18 @@ fn post_enter() -> anyhow::Result<()> {
 }
 
 pub fn paste_text_via_clipboard(text: &str, mode: InsertMode) -> anyhow::Result<()> {
-    if !is_accessibility_trusted() {
-        return Err(anyhow::anyhow!(
-            "Accessibility permission is required to paste into other apps (enable it in System Settings → Privacy & Security → Accessibility)."
-        ));
-    }
+    let trusted = is_accessibility_trusted();
 
     let pasteboard = NSPasteboard::generalPasteboard();
 
     let original_change = pasteboard.changeCount();
 
     // Snapshot full pasteboard.
-    let snapshot = snapshot_pasteboard(&pasteboard);
+    let snapshot = if trusted {
+        snapshot_pasteboard(&pasteboard)
+    } else {
+        None
+    };
 
     // Write our text.
     pasteboard.clearContents();
@@ -333,6 +344,14 @@ pub fn paste_text_via_clipboard(text: &str, mode: InsertMode) -> anyhow::Result<
 
     // Small delay to ensure the target app sees clipboard update.
     thread::sleep(Duration::from_millis(50));
+
+    // Without Accessibility trust we cannot synthesize Cmd+V, but users should still
+    // be able to paste manually.
+    if !trusted {
+        return Err(anyhow::anyhow!(
+            "Accessibility permission is required to paste into other apps (enable it in System Settings → Privacy & Security → Accessibility). Copied to clipboard — press Cmd+V."
+        ));
+    }
 
     // Cmd+V uses a physical keycode. On non-US layouts, that key may not map to V,
     // so temporarily switch to an ASCII US layout before posting the shortcut.
@@ -353,7 +372,11 @@ pub fn paste_text_via_clipboard(text: &str, mode: InsertMode) -> anyhow::Result<
 
     let current_change = pasteboard.changeCount();
     if current_change == after_write_change || current_change == original_change {
-        restore_pasteboard(&pasteboard, &snapshot);
+        if let Some(snapshot) = snapshot.as_deref() {
+            restore_pasteboard(&pasteboard, snapshot);
+        } else {
+            log::warn!("Skipping pasteboard restore: snapshot unavailable");
+        }
     }
 
     Ok(())
