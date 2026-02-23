@@ -9,7 +9,7 @@
 // new platform dependencies without committing to a full Linux UX.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -75,7 +75,7 @@ pub struct AudioInputDeviceInfo {
     pub is_default: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct EnumeratedInputDevice {
     id: String,
     name: String,
