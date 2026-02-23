@@ -79,6 +79,13 @@ pub struct GlobalDefaults {
     #[serde(default)]
     pub microphone_device: Option<String>,
 
+    /// Optional preferred microphone device id.
+    ///
+    /// When present, this takes precedence over `microphone_device` because names can be
+    /// duplicated across different hardware devices.
+    #[serde(default)]
+    pub microphone_device_id: Option<String>,
+
     #[serde(default = "default_history_enabled")]
     pub history_enabled: bool,
 
@@ -231,6 +238,7 @@ mod tests {
             llm_base_url: "http://localhost".into(),
             llm_model: "gpt-4o-mini".into(),
             microphone_device: None,
+            microphone_device_id: None,
             history_enabled: true,
             context: crate::context::ContextToggles::default(),
         };

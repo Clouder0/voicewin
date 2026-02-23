@@ -14,6 +14,13 @@ type ModelStatus = {
   preferred_path: string;
 };
 
+type MicrophoneDevice = {
+  id: string;
+  name: string;
+  is_default: boolean;
+  is_selected: boolean;
+};
+
 function splitHotkey(hotkey: string): string[] {
   return hotkey
     .split('+')
@@ -89,8 +96,10 @@ export function OverviewPage() {
   const [hotkeySaving, setHotkeySaving] = useState(false);
 
   const [micPickerOpen, setMicPickerOpen] = useState(false);
-  const [micNames, setMicNames] = useState<string[] | null>(null);
+  const [micDevices, setMicDevices] = useState<MicrophoneDevice[] | null>(null);
   const [micError, setMicError] = useState<string | null>(null);
+  const [selectedMicName, setSelectedMicName] = useState<string | null>(null);
+  const [selectedMicId, setSelectedMicId] = useState<string | null>(null);
 
   const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
 
@@ -134,6 +143,18 @@ export function OverviewPage() {
         try {
           const ms = await invoke<ModelStatus>('get_model_status');
           setModelStatus(ms);
+        } catch {
+          // ignore
+        }
+
+        try {
+          const cfg = await invoke<{
+            defaults: { microphone_device?: string | null; microphone_device_id?: string | null };
+          }>('get_config');
+          const nextName = cfg.defaults.microphone_device?.trim() ?? '';
+          const nextId = cfg.defaults.microphone_device_id?.trim() ?? '';
+          setSelectedMicName(nextName.length > 0 ? nextName : null);
+          setSelectedMicId(nextId.length > 0 ? nextId : null);
         } catch {
           // ignore
         }
@@ -203,20 +224,33 @@ export function OverviewPage() {
       <div style={{ marginTop: 'var(--space-24)', display: 'flex', justifyContent: 'center' }}>
         <MicHero
           onClick={async () => {
-            setMicPickerOpen((v) => !v);
-            if (micNames) return;
+            const nextOpen = !micPickerOpen;
+            setMicPickerOpen(nextOpen);
+            if (!nextOpen) return;
 
             try {
               const { invoke } = await import('@tauri-apps/api/core');
-              const names = await invoke<string[]>('list_microphones');
-              setMicNames(names);
+              const cfg = await invoke<{
+                defaults: { microphone_device?: string | null; microphone_device_id?: string | null };
+              }>('get_config');
+              const nextName = cfg.defaults.microphone_device?.trim() ?? '';
+              const nextId = cfg.defaults.microphone_device_id?.trim() ?? '';
+              setSelectedMicName(nextName.length > 0 ? nextName : null);
+              setSelectedMicId(nextId.length > 0 ? nextId : null);
+
+              const devices = await invoke<MicrophoneDevice[]>('list_microphone_devices');
+              setMicDevices(devices);
               setMicError(null);
             } catch (e) {
               setMicError(String(e));
-              setMicNames([]);
+              setMicDevices([]);
             }
           }}
         />
+      </div>
+
+      <div className="vw-type-caption" style={{ marginTop: 'var(--space-8)', textAlign: 'center' }}>
+        Selected microphone: {selectedMicName ?? 'System Default'}
       </div>
 
       {micPickerOpen ? (
@@ -226,6 +260,10 @@ export function OverviewPage() {
             Click a device to select it.
           </div>
 
+          <div className="vw-type-caption" style={{ marginTop: 'var(--space-8)' }}>
+            Current: {selectedMicName ?? 'System Default'}
+          </div>
+
           {micError ? (
             <div className="vw-type-caption" style={{ marginTop: 'var(--space-8)', color: 'var(--color-danger-fg)' }}>
               {micError}
@@ -233,24 +271,67 @@ export function OverviewPage() {
           ) : null}
 
           <div style={{ marginTop: 'var(--space-12)', display: 'grid', gap: 'var(--space-8)' }}>
-            {(micNames ?? []).map((n) => (
+            <button
+              type="button"
+              className={`vw-button ${selectedMicId === null && selectedMicName === null ? 'vw-button--primary' : 'vw-button--secondary'}`}
+              onClick={async () => {
+                try {
+                  const { invoke } = await import('@tauri-apps/api/core');
+                  const cfg = await invoke<{
+                    defaults: { microphone_device: string | null; microphone_device_id?: string | null };
+                  }>('get_config');
+                  cfg.defaults.microphone_device = null;
+                  cfg.defaults.microphone_device_id = null;
+                  await invoke('set_config', { cfg });
+                  setSelectedMicName(null);
+                  setSelectedMicId(null);
+                  setMicPickerOpen(false);
+                } catch (e) {
+                  setMicError(String(e));
+                }
+              }}
+            >
+              <span>System Default</span>
+              {selectedMicId === null && selectedMicName === null ? (
+                <span style={{ marginInlineStart: 'var(--space-8)' }} className="vw-type-caption">
+                  Selected
+                </span>
+              ) : null}
+            </button>
+
+            {(micDevices ?? []).map((device) => (
               <button
-                key={n}
+                key={device.id}
                 type="button"
-                className="vw-button vw-button--secondary"
+                className={`vw-button ${device.is_selected ? 'vw-button--primary' : 'vw-button--secondary'}`}
                 onClick={async () => {
                   try {
                     const { invoke } = await import('@tauri-apps/api/core');
-                    const cfg = await invoke<{ defaults: { microphone_device: string | null } }>('get_config');
-                    cfg.defaults.microphone_device = n;
+                    const cfg = await invoke<{
+                      defaults: { microphone_device: string | null; microphone_device_id?: string | null };
+                    }>('get_config');
+                    cfg.defaults.microphone_device = device.name;
+                    cfg.defaults.microphone_device_id = device.id;
                     await invoke('set_config', { cfg });
+                    setSelectedMicName(device.name);
+                    setSelectedMicId(device.id);
                     setMicPickerOpen(false);
                   } catch (e) {
                     setMicError(String(e));
                   }
                 }}
               >
-                {n}
+                <span>{device.name}</span>
+                {device.is_selected ? (
+                  <span style={{ marginInlineStart: 'var(--space-8)' }} className="vw-type-caption">
+                    Selected
+                  </span>
+                ) : null}
+                {device.is_default ? (
+                  <span style={{ marginInlineStart: 'var(--space-8)' }} className="vw-type-caption">
+                    Default
+                  </span>
+                ) : null}
               </button>
             ))}
           </div>

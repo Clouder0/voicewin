@@ -12,9 +12,10 @@
 use std::thread;
 use std::time::Duration;
 
+use core_foundation::array::CFArray;
 use core_foundation::base::TCFType;
 use core_foundation::dictionary::CFDictionary;
-use core_foundation::string::CFString;
+use core_foundation::string::{CFString, CFStringRef};
 use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use objc2::rc::Retained;
@@ -27,10 +28,32 @@ use objc2_foundation::{NSArray, NSData, NSString};
 
 use voicewin_core::types::InsertMode;
 
+#[repr(C)]
+struct __TISInputSource;
+type TISInputSourceRef = *const __TISInputSource;
+
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
     fn AXIsProcessTrustedWithOptions(options: *const AnyObject) -> bool;
     static kAXTrustedCheckOptionPrompt: *const AnyObject;
+}
+
+#[link(name = "Carbon", kind = "framework")]
+unsafe extern "C" {
+    fn TISCopyCurrentKeyboardInputSource() -> TISInputSourceRef;
+    fn TISCreateInputSourceList(
+        properties: core_foundation::dictionary::CFDictionaryRef,
+        includeAllInstalled: bool,
+    ) -> core_foundation::array::CFArrayRef;
+    fn TISGetInputSourceProperty(
+        inputSource: TISInputSourceRef,
+        propertyKey: CFStringRef,
+    ) -> *const AnyObject;
+    fn TISSelectInputSource(inputSource: TISInputSourceRef) -> core_foundation::base::OSStatus;
+
+    static kTISPropertyInputSourceID: CFStringRef;
+    static kTISPropertyInputSourceCategory: CFStringRef;
+    static kTISCategoryKeyboardInputSource: CFStringRef;
 }
 
 fn is_accessibility_trusted() -> bool {
@@ -41,6 +64,103 @@ fn is_accessibility_trusted() -> bool {
         let options = CFDictionary::from_CFType_pairs(&[(key, value)]);
         AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef().cast())
     }
+}
+
+fn input_source_id(source: TISInputSourceRef) -> Option<String> {
+    if source.is_null() {
+        return None;
+    }
+
+    let raw = unsafe { TISGetInputSourceProperty(source, kTISPropertyInputSourceID) };
+    if raw.is_null() {
+        return None;
+    }
+
+    let s = unsafe { CFString::wrap_under_get_rule(raw.cast()) };
+    Some(s.to_string())
+}
+
+fn is_us_qwerty_input_source_id(id: &str) -> bool {
+    matches!(id, "com.apple.keylayout.ABC" | "com.apple.keylayout.US")
+}
+
+struct KeyboardInputSourceGuard {
+    previous: TISInputSourceRef,
+}
+
+impl Drop for KeyboardInputSourceGuard {
+    fn drop(&mut self) {
+        if self.previous.is_null() {
+            return;
+        }
+
+        unsafe {
+            let _ = TISSelectInputSource(self.previous);
+            core_foundation::base::CFRelease(self.previous.cast());
+        }
+    }
+}
+
+fn maybe_switch_to_us_qwerty_layout() -> Option<KeyboardInputSourceGuard> {
+    let current = unsafe { TISCopyCurrentKeyboardInputSource() };
+    if current.is_null() {
+        return None;
+    }
+
+    if let Some(id) = input_source_id(current) {
+        if is_us_qwerty_input_source_id(&id) {
+            unsafe {
+                core_foundation::base::CFRelease(current.cast());
+            }
+            return None;
+        }
+    }
+
+    let key_category = unsafe { CFString::wrap_under_get_rule(kTISPropertyInputSourceCategory) };
+    let value_keyboard = unsafe { CFString::wrap_under_get_rule(kTISCategoryKeyboardInputSource) };
+    let properties = CFDictionary::from_CFType_pairs(&[(key_category, value_keyboard)]);
+
+    let list = unsafe { TISCreateInputSourceList(properties.as_concrete_TypeRef(), false) };
+    if list.is_null() {
+        unsafe {
+            core_foundation::base::CFRelease(current.cast());
+        }
+        return None;
+    }
+
+    let sources: CFArray<*const std::ffi::c_void> =
+        unsafe { TCFType::wrap_under_create_rule(list) };
+
+    let mut abc: Option<TISInputSourceRef> = None;
+    let mut us: Option<TISInputSourceRef> = None;
+    for raw in sources.iter() {
+        let source = *raw as TISInputSourceRef;
+        if let Some(id) = input_source_id(source) {
+            if id == "com.apple.keylayout.ABC" {
+                abc = Some(source);
+                break;
+            }
+            if id == "com.apple.keylayout.US" {
+                us = Some(source);
+            }
+        }
+    }
+
+    let target = abc.or(us);
+    if let Some(target) = target {
+        let status = unsafe { TISSelectInputSource(target) };
+        if status == 0 {
+            log::info!("Switched keyboard layout to US QWERTY for paste shortcut");
+            return Some(KeyboardInputSourceGuard { previous: current });
+        }
+
+        log::warn!("Failed to switch keyboard layout for paste shortcut: OSStatus={status}");
+    }
+
+    unsafe {
+        core_foundation::base::CFRelease(current.cast());
+    }
+    None
 }
 
 #[derive(Debug, Clone)]
@@ -214,6 +334,10 @@ pub fn paste_text_via_clipboard(text: &str, mode: InsertMode) -> anyhow::Result<
     // Small delay to ensure the target app sees clipboard update.
     thread::sleep(Duration::from_millis(50));
 
+    // Cmd+V uses a physical keycode. On non-US layouts, that key may not map to V,
+    // so temporarily switch to an ASCII US layout before posting the shortcut.
+    let _keyboard_layout_guard = maybe_switch_to_us_qwerty_layout();
+
     post_cmd_v()?;
 
     if matches!(mode, InsertMode::PasteAndEnter) {
@@ -233,4 +357,20 @@ pub fn paste_text_via_clipboard(text: &str, mode: InsertMode) -> anyhow::Result<
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_us_qwerty_input_source_id;
+
+    #[test]
+    fn accepts_supported_us_layout_ids() {
+        assert!(is_us_qwerty_input_source_id("com.apple.keylayout.ABC"));
+        assert!(is_us_qwerty_input_source_id("com.apple.keylayout.US"));
+    }
+
+    #[test]
+    fn rejects_non_us_layout_ids() {
+        assert!(!is_us_qwerty_input_source_id("com.apple.keylayout.German"));
+    }
 }

@@ -131,6 +131,7 @@ async fn main() -> anyhow::Result<()> {
         llm_base_url,
         llm_model,
         microphone_device: None,
+        microphone_device_id: None,
         history_enabled: true,
         context: voicewin_core::context::ContextToggles::default(),
     };

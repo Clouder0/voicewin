@@ -24,6 +24,7 @@ function baseConfig() {
       llm_base_url: 'https://api.openai.com/v1',
       llm_model: 'gpt-4o-mini',
       microphone_device: null,
+      microphone_device_id: null,
       history_enabled: true,
       context: {
         use_clipboard: false,

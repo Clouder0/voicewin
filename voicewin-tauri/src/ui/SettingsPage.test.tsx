@@ -24,6 +24,7 @@ function baseConfig() {
       llm_base_url: 'https://api.openai.com/v1',
       llm_model: 'gpt-4o-mini',
       microphone_device: null,
+      microphone_device_id: null,
       history_enabled: true,
       context: {
         use_clipboard: false,
@@ -133,5 +134,25 @@ describe('SettingsPage loading and local model status', () => {
     await user.selectOptions(providerSelect, 'local');
 
     expect(await screen.findByText('Missing')).toBeInTheDocument();
+  });
+
+  it('renders OpenAI key controls inside responsive wrapper classes', async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'get_config') return baseConfig();
+      if (command === 'get_provider_status') return baseProviderStatus();
+      if (command === 'get_model_status') return baseModelStatus();
+      throw new Error(`Unexpected invoke command: ${command}`);
+    });
+
+    render(<SettingsPage />);
+
+    const keyInput = await screen.findByPlaceholderText('Paste key…');
+    const controls = keyInput.parentElement;
+    expect(controls).not.toBeNull();
+    expect(controls).toHaveClass('vw-settingControls');
+
+    const rowRight = controls?.parentElement;
+    expect(rowRight).not.toBeNull();
+    expect(rowRight).toHaveClass('vw-settingRowRight');
   });
 });

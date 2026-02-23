@@ -181,6 +181,47 @@ body.overlayPage {
   border-bottom-width: 2px;
 }
 
+.vw-settingRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--space-16);
+  row-gap: var(--space-8);
+  padding: var(--space-12);
+}
+
+.vw-settingRowLeft {
+  min-width: 0;
+  flex: 1 1 280px;
+}
+
+.vw-settingRowRight {
+  min-width: 0;
+  display: flex;
+  flex: 1 1 auto;
+  margin-inline-start: auto;
+  justify-content: flex-end;
+}
+
+.vw-settingControls {
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+}
+
+@media (max-width: 860px) {
+  .vw-settingRowRight,
+  .vw-settingControls {
+    margin-inline-start: 0;
+    flex-basis: 100%;
+    justify-content: flex-start;
+  }
+}
+
 .vw-kbd {
   display: inline-flex;
   align-items: center;
@@ -246,6 +287,11 @@ body.overlayPage {
   place-items: center;
   position: relative;
   cursor: pointer;
+}
+
+.vw-navIcon {
+  width: var(--nav-icon-size);
+  height: var(--nav-icon-size);
 }
 
 .vw-navItem:hover {

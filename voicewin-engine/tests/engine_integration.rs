@@ -158,6 +158,7 @@ async fn end_to_end_session_uses_power_mode_and_llm() {
         llm_base_url: server.uri(),
         llm_model: "gpt-4o-mini".into(),
         microphone_device: None,
+        microphone_device_id: None,
         history_enabled: true,
         context: voicewin_core::context::ContextToggles::default(),
     };
@@ -227,6 +228,7 @@ async fn trigger_words_do_not_strip_without_llm_key() {
         llm_base_url: "https://api.example.com/v1".into(),
         llm_model: "gpt-4o-mini".into(),
         microphone_device: None,
+        microphone_device_id: None,
         history_enabled: true,
         context: voicewin_core::context::ContextToggles::default(),
     };
@@ -281,6 +283,7 @@ async fn transcript_override_skips_stt_and_inserts() {
         llm_base_url: "https://api.example.com/v1".into(),
         llm_model: "gpt-4o-mini".into(),
         microphone_device: None,
+        microphone_device_id: None,
         history_enabled: true,
         context: voicewin_core::context::ContextToggles::default(),
     };
@@ -325,6 +328,7 @@ async fn transcript_override_empty_is_failure() {
         llm_base_url: "https://api.example.com/v1".into(),
         llm_model: "gpt-4o-mini".into(),
         microphone_device: None,
+        microphone_device_id: None,
         history_enabled: true,
         context: voicewin_core::context::ContextToggles::default(),
     };

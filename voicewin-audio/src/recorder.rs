@@ -8,6 +8,7 @@
 // Linux support is intentionally not enabled yet because we don't want to introduce
 // new platform dependencies without committing to a full Linux UX.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
@@ -67,6 +68,21 @@ pub struct AudioRecorder {
     level_cb: Arc<Mutex<Option<Arc<dyn Fn(&[f32]) + Send + Sync + 'static>>>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioInputDeviceInfo {
+    pub id: String,
+    pub name: String,
+    pub is_default: bool,
+}
+
+#[derive(Debug, Clone)]
+struct EnumeratedInputDevice {
+    id: String,
+    name: String,
+    is_default: bool,
+    device: Device,
+}
+
 impl AudioRecorder {
     pub fn set_level_callback<F>(&self, cb: F)
     where
@@ -89,41 +105,108 @@ enum WorkerMsg {
 }
 
 impl AudioRecorder {
-    pub fn list_input_device_names() -> Result<Vec<String>, AudioCaptureError> {
-        let host = cpal::default_host();
+    fn build_input_device_id(name: &str, occurrence: usize) -> String {
+        format!("cpal:{occurrence}:{name}")
+    }
+
+    fn enumerate_input_devices(
+        host: &cpal::Host,
+    ) -> Result<Vec<EnumeratedInputDevice>, AudioCaptureError> {
+        let default_name = host.default_input_device().and_then(|d| d.name().ok());
+        let mut default_marked = false;
+        let mut counts_by_name: HashMap<String, usize> = HashMap::new();
         let mut out = Vec::new();
+
         for dev in host.input_devices()? {
-            if let Ok(name) = dev.name() {
-                out.push(name);
-            }
+            let Ok(name) = dev.name() else {
+                continue;
+            };
+
+            let occurrence = counts_by_name
+                .entry(name.clone())
+                .and_modify(|n| *n += 1)
+                .or_insert(1);
+
+            let is_default = match default_name.as_ref() {
+                Some(default_name) if !default_marked && default_name == &name => {
+                    default_marked = true;
+                    true
+                }
+                _ => false,
+            };
+
+            out.push(EnumeratedInputDevice {
+                id: Self::build_input_device_id(&name, *occurrence),
+                name,
+                is_default,
+                device: dev,
+            });
         }
+
+        Ok(out)
+    }
+
+    pub fn list_input_devices() -> Result<Vec<AudioInputDeviceInfo>, AudioCaptureError> {
+        let host = cpal::default_host();
+        let devices = Self::enumerate_input_devices(&host)?;
+        Ok(devices
+            .into_iter()
+            .map(|d| AudioInputDeviceInfo {
+                id: d.id,
+                name: d.name,
+                is_default: d.is_default,
+            })
+            .collect())
+    }
+
+    pub fn list_input_device_names() -> Result<Vec<String>, AudioCaptureError> {
+        let mut out = Self::list_input_devices()?
+            .into_iter()
+            .map(|d| d.name)
+            .collect::<Vec<_>>();
         out.sort();
         out.dedup();
         Ok(out)
     }
 
-    pub fn open_named(device_name: Option<&str>) -> Result<Self, AudioCaptureError> {
+    pub fn open_preferred(
+        preferred_id: Option<&str>,
+        preferred_name: Option<&str>,
+    ) -> Result<Self, AudioCaptureError> {
         let host = cpal::default_host();
+        let devices = Self::enumerate_input_devices(&host)?;
 
-        if let Some(needle) = device_name {
-            let needle = needle.trim();
-            if !needle.is_empty() {
-                if let Ok(devices) = host.input_devices() {
-                    for dev in devices {
-                        if let Ok(name) = dev.name() {
-                            if name == needle {
-                                log::info!("Using input device: {name}");
-                                return Self::open(Some(dev));
-                            }
-                        }
-                    }
-                }
-
-                log::warn!("Preferred input device not found, falling back to default: {needle}");
+        if let Some(needle_id) = preferred_id.map(str::trim).filter(|v| !v.is_empty()) {
+            if let Some(found) = devices.iter().find(|d| d.id == needle_id) {
+                log::info!(
+                    "Using preferred input device id: {} ({})",
+                    found.id,
+                    found.name
+                );
+                return Self::open(Some(found.device.clone()));
             }
+
+            log::warn!("Preferred input device id not found, falling back: {needle_id}");
+        }
+
+        if let Some(needle_name) = preferred_name.map(str::trim).filter(|v| !v.is_empty()) {
+            if let Some(found) = devices.iter().find(|d| d.name == needle_name) {
+                log::info!(
+                    "Using preferred input device name: {} ({})",
+                    found.name,
+                    found.id
+                );
+                return Self::open(Some(found.device.clone()));
+            }
+
+            log::warn!("Preferred input device name not found, falling back: {needle_name}");
         }
 
         Self::open_default()
+    }
+
+    pub fn open_named(device_name: Option<&str>) -> Result<Self, AudioCaptureError> {
+        Self::open_preferred(None, device_name)
     }
 
     pub fn open_default() -> Result<Self, AudioCaptureError> {

@@ -38,18 +38,28 @@ pub fn user_facing_audio_error(e: &voicewin_audio::AudioCaptureError) -> String 
 
 use voicewin_runtime::runtime_engine::build_engine_from_config;
 use voicewin_runtime::secrets::{
-    configure_secret_store_path, delete_secret, get_secret, set_secret, SecretKey,
+    SecretKey, configure_secret_store_path, delete_secret, get_secret, set_secret,
 };
 
-fn normalize_microphone_device(value: Option<&str>) -> Option<String> {
+fn normalize_microphone_value(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .map(ToOwned::to_owned)
 }
 
+pub fn microphone_selection_changed(
+    previous_id: Option<&str>,
+    previous_name: Option<&str>,
+    next_id: Option<&str>,
+    next_name: Option<&str>,
+) -> bool {
+    normalize_microphone_value(previous_id) != normalize_microphone_value(next_id)
+        || normalize_microphone_value(previous_name) != normalize_microphone_value(next_name)
+}
+
 pub fn microphone_device_changed(previous: Option<&str>, next: Option<&str>) -> bool {
-    normalize_microphone_device(previous) != normalize_microphone_device(next)
+    microphone_selection_changed(None, previous, None, next)
 }
 
 #[derive(Clone)]
@@ -88,10 +98,13 @@ impl AppService {
         let mut recorder = self.recorder.lock().await;
         if recorder.is_none() {
             let cfg = self.load_config().ok();
-            let preferred = cfg
+            let preferred_id = cfg
+                .as_ref()
+                .and_then(|c| c.defaults.microphone_device_id.as_deref());
+            let preferred_name = cfg
                 .as_ref()
                 .and_then(|c| c.defaults.microphone_device.as_deref());
-            *recorder = Some(AudioRecorder::open_named(preferred)?);
+            *recorder = Some(AudioRecorder::open_preferred(preferred_id, preferred_name)?);
         }
         recorder
             .as_ref()
@@ -150,10 +163,13 @@ impl AppService {
         let mut recorder = self.recorder.lock().await;
         if recorder.is_none() {
             let cfg = self.load_config().ok();
-            let preferred = cfg
+            let preferred_id = cfg
+                .as_ref()
+                .and_then(|c| c.defaults.microphone_device_id.as_deref());
+            let preferred_name = cfg
                 .as_ref()
                 .and_then(|c| c.defaults.microphone_device.as_deref());
-            *recorder = Some(AudioRecorder::open_named(preferred)?);
+            *recorder = Some(AudioRecorder::open_preferred(preferred_id, preferred_name)?);
         }
         let r = recorder.as_ref().ok_or(AudioCaptureError::NoInputDevice)?;
 
@@ -350,6 +366,16 @@ mod tests {
     }
 
     #[test]
+    fn microphone_id_change_is_detected_even_when_name_matches() {
+        assert!(microphone_selection_changed(
+            Some("cpal:1:USB Mic"),
+            Some("USB Mic"),
+            Some("cpal:2:USB Mic"),
+            Some("USB Mic"),
+        ));
+    }
+
+    #[test]
     fn unchanged_microphone_is_not_detected_as_change() {
         assert!(!microphone_device_changed(
             Some("Built-in Mic"),
@@ -399,6 +425,7 @@ mod tests {
                 llm_base_url: "https://example.com/v1".into(),
                 llm_model: "gpt-4o-mini".into(),
                 microphone_device: None,
+                microphone_device_id: None,
                 history_enabled: true,
                 context: voicewin_core::context::ContextToggles::default(),
             },

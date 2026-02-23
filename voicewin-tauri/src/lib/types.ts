@@ -16,6 +16,7 @@ export type GlobalDefaults = {
   llm_base_url: string;
   llm_model: string;
   microphone_device?: string | null;
+  microphone_device_id?: string | null;
   history_enabled: boolean;
   context: ContextToggles;
 };

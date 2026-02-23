@@ -85,7 +85,7 @@ const EVENT_MODEL_DOWNLOAD_DONE: &str = "voicewin://model_download_done";
 const BUNDLED_TINY_MODEL_ID: &str = "whisper-tiny-bundled";
 
 #[cfg(any(windows, target_os = "macos"))]
-use voicewin_audio::AudioRecorder;
+use voicewin_audio::{AudioInputDeviceInfo, AudioRecorder};
 
 mod session_controller;
 mod tray_icon;
@@ -425,10 +425,16 @@ async fn set_config(
         .map_err(|e| e.to_string())?;
 
     #[cfg(any(windows, target_os = "macos"))]
-    let previous_microphone = svc
+    let (previous_microphone_id, previous_microphone_name) = svc
         .load_config()
         .ok()
-        .and_then(|existing| existing.defaults.microphone_device);
+        .map(|existing| {
+            (
+                existing.defaults.microphone_device_id,
+                existing.defaults.microphone_device,
+            )
+        })
+        .unwrap_or((None, None));
 
     // Normalize known model filenames in our app models dir.
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -447,8 +453,10 @@ async fn set_config(
 
     #[cfg(any(windows, target_os = "macos"))]
     {
-        if voicewin_appcore::service::microphone_device_changed(
-            previous_microphone.as_deref(),
+        if voicewin_appcore::service::microphone_selection_changed(
+            previous_microphone_id.as_deref(),
+            previous_microphone_name.as_deref(),
+            cfg.defaults.microphone_device_id.as_deref(),
             cfg.defaults.microphone_device.as_deref(),
         ) {
             svc.invalidate_recorder().await;
@@ -839,6 +847,81 @@ async fn clear_elevenlabs_api_key(
 #[tauri::command]
 async fn list_microphones() -> Result<Vec<String>, String> {
     AudioRecorder::list_input_device_names().map_err(|e| e.to_string())
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+#[derive(serde::Serialize)]
+struct MicrophoneDevice {
+    id: String,
+    name: String,
+    is_default: bool,
+    is_selected: bool,
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+#[tauri::command]
+async fn list_microphone_devices(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<Vec<MicrophoneDevice>, String> {
+    fn normalize(value: Option<String>) -> Option<String> {
+        value
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    }
+
+    let svc = state
+        .service
+        .get_or_try_init(|| async { build_service(&app).await })
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let cfg = svc.load_config().ok();
+    let selected_id = normalize(
+        cfg.as_ref()
+            .and_then(|c| c.defaults.microphone_device_id.clone()),
+    );
+    let selected_name = normalize(
+        cfg.as_ref()
+            .and_then(|c| c.defaults.microphone_device.clone()),
+    );
+
+    let devices = AudioRecorder::list_input_devices().map_err(|e| e.to_string())?;
+    let mut selected_found = false;
+
+    let mut mapped = devices
+        .into_iter()
+        .map(
+            |AudioInputDeviceInfo {
+                 id,
+                 name,
+                 is_default,
+             }| {
+                let by_id = selected_id.as_ref().is_some_and(|needle| needle == &id);
+                let by_name = selected_id.is_none()
+                    && selected_name.as_ref().is_some_and(|needle| needle == &name);
+                let is_selected = by_id || by_name;
+                if is_selected {
+                    selected_found = true;
+                }
+
+                MicrophoneDevice {
+                    id,
+                    name,
+                    is_default,
+                    is_selected,
+                }
+            },
+        )
+        .collect::<Vec<_>>();
+
+    if !selected_found && selected_id.is_none() && selected_name.is_none() {
+        if let Some(default_device) = mapped.iter_mut().find(|d| d.is_default) {
+            default_device.is_selected = true;
+        }
+    }
+
+    Ok(mapped)
 }
 
 #[tauri::command]
@@ -1372,6 +1455,8 @@ fn main() {
             get_model_status,
             #[cfg(any(windows, target_os = "macos"))]
             list_microphones,
+            #[cfg(any(windows, target_os = "macos"))]
+            list_microphone_devices,
             list_models,
             download_model,
             set_active_model,

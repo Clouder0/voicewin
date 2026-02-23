@@ -2412,6 +2412,7 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
  "enigo",
+ "log",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",

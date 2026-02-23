@@ -55,16 +55,8 @@ function SettingRow({
   right: React.ReactNode;
 }) {
   return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 'var(--space-16)',
-        padding: 'var(--space-12)',
-      }}
-    >
-      <div style={{ minWidth: 0 }}>
+    <div className="vw-settingRow">
+      <div className="vw-settingRowLeft">
         <div className="vw-type-bodyStrong">{title}</div>
         {description ? (
           <div className="vw-type-caption" style={{ marginTop: 4 }}>
@@ -72,7 +64,7 @@ function SettingRow({
           </div>
         ) : null}
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-8)' }}>{right}</div>
+      <div className="vw-settingRowRight">{right}</div>
     </div>
   );
 }
@@ -353,7 +345,7 @@ export function SettingsPage() {
           title="API key"
           description={`Status: ${elevenKeyStatus}.`}
           right={
-            <>
+            <div className="vw-settingControls">
               <input
                 className="vw-input"
                 type="password"
@@ -448,7 +440,7 @@ export function SettingsPage() {
               >
                 Clear
               </button>
-            </>
+            </div>
           }
         />
 
@@ -513,7 +505,7 @@ export function SettingsPage() {
           title="API key"
           description={`Status: ${openaiKeyStatus}. The key is stored in VoiceWin secret storage (not in config.json).`}
           right={
-            <>
+            <div className="vw-settingControls">
               <input
                 className="vw-input"
                 type="password"
@@ -595,7 +587,7 @@ export function SettingsPage() {
               >
                 Clear
               </button>
-            </>
+            </div>
           }
         />
 
@@ -619,7 +611,7 @@ export function SettingsPage() {
           title="Base URL"
           description="Example: https://api.openai.com/v1 or http://localhost:11434/v1"
           right={
-            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-8)' }}>
+            <div className="vw-settingControls">
               <input
                 className="vw-input"
                 type="text"
@@ -650,7 +642,7 @@ export function SettingsPage() {
           title="Model"
           description="Example: gpt-4o-mini"
           right={
-            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-8)' }}>
+            <div className="vw-settingControls">
               <input
                 className="vw-input"
                 type="text"

@@ -26,6 +26,7 @@ pub fn default_global_defaults() -> GlobalDefaults {
         llm_base_url: "https://api.openai.com/v1".into(),
         llm_model: "gpt-4o-mini".into(),
         microphone_device: None,
+        microphone_device_id: None,
         history_enabled: true,
         context: voicewin_core::context::ContextToggles::default(),
     }

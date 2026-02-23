@@ -9,8 +9,9 @@
   --space-48: 48px;
 
   /* Component sizing tokens (explicit in design spec) */
-  --nav-rail-width: 68px;
-  --nav-item-size: 40px;
+  --nav-rail-width: 76px;
+  --nav-item-size: 44px;
+  --nav-icon-size: 22px;
   --hud-height: 48px;
   --hud-min-width: 160px;
   --hud-max-width: 600px;
