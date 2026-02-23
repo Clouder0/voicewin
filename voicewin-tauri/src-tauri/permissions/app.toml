@@ -90,6 +90,11 @@ description = "Enables the list_microphones command without any pre-configured s
 commands.allow = ["list_microphones"]
 
 [[permission]]
+identifier = "allow-list-microphone-devices"
+description = "Enables the list_microphone_devices command without any pre-configured scope."
+commands.allow = ["list_microphone_devices"]
+
+[[permission]]
 identifier = "allow-list-models"
 description = "Enables the list_models command without any pre-configured scope."
 commands.allow = ["list_models"]

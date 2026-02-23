@@ -6,6 +6,7 @@
   "permissions": [
     "allow-get-toggle-hotkey",
     "allow-set-toggle-hotkey",
-    "allow-list-microphones"
+    "allow-list-microphones",
+    "allow-list-microphone-devices"
   ]
 }
