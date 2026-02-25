@@ -11,6 +11,8 @@ static OVERLAY_IS_DRAGGING: std::sync::OnceLock<std::sync::atomic::AtomicBool> =
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
+#[cfg(target_os = "macos")]
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_store::StoreExt;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1351,7 +1353,7 @@ async fn open_macos_accessibility_settings() -> Result<(), String> {
     use std::process::Command;
 
     let url = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
-    let status = Command::new("open")
+    let status = Command::new("/usr/bin/open")
         .arg(url)
         .status()
         .map_err(|e| e.to_string())?;
@@ -1404,7 +1406,7 @@ async fn open_macos_microphone_settings() -> Result<(), String> {
     use std::process::Command;
 
     let url = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone";
-    let status = Command::new("open")
+    let status = Command::new("/usr/bin/open")
         .arg(url)
         .status()
         .map_err(|e| e.to_string())?;
@@ -1747,31 +1749,123 @@ fn main() {
                         }
                         "open_logs" => {
                             // Best-effort: open the app log directory in the OS file manager.
-                            if let Ok(dir) = app.path().app_log_dir() {
-                                #[cfg(windows)]
-                                {
+                            // Do not fail silently; show a dialog on error.
+                            #[cfg(target_os = "macos")]
+                            {
+                                use std::process::Command;
+
+                                let mut opened = false;
+                                let mut errors: Vec<String> = Vec::new();
+
+                                let log_dir = match app.path().app_log_dir() {
+                                    Ok(dir) => Some(dir),
+                                    Err(e) => {
+                                        errors.push(format!("failed to resolve log dir: {e}"));
+                                        None
+                                    }
+                                };
+
+                                if let Some(dir) = log_dir.as_ref() {
+                                    let log_file = dir.join("voicewin.log");
+
+                                    let res = if log_file.exists() {
+                                        Command::new("/usr/bin/open")
+                                            .arg("-R")
+                                            .arg(&log_file)
+                                            .status()
+                                            .map(|s| (s, format!("reveal {}", log_file.display())))
+                                    } else {
+                                        Command::new("/usr/bin/open")
+                                            .arg(dir)
+                                            .status()
+                                            .map(|s| (s, format!("open {}", dir.display())))
+                                    };
+
+                                    match res {
+                                        Ok((status, _)) if status.success() => {
+                                            opened = true;
+                                        }
+                                        Ok((status, label)) => {
+                                            errors.push(format!("/usr/bin/open ({label}) exited with {status}"));
+                                        }
+                                        Err(e) => {
+                                            errors.push(format!("/usr/bin/open failed: {e}"));
+                                        }
+                                    }
+                                }
+
+                                // Fall back to the panic log file in temp.
+                                if !opened {
+                                    let p = std::env::temp_dir().join("voicewin_panic.log");
+                                    if p.exists() {
+                                        match Command::new("/usr/bin/open")
+                                            .arg("-R")
+                                            .arg(&p)
+                                            .status()
+                                        {
+                                            Ok(status) if status.success() => {
+                                                opened = true;
+                                            }
+                                            Ok(status) => {
+                                                errors.push(format!(
+                                                    "/usr/bin/open (reveal {}) exited with {status}",
+                                                    p.display()
+                                                ));
+                                            }
+                                            Err(e) => {
+                                                errors.push(format!(
+                                                    "/usr/bin/open (reveal {}) failed: {e}",
+                                                    p.display()
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if !opened {
+                                    let log_dir_display = log_dir
+                                        .as_ref()
+                                        .map(|p| p.display().to_string())
+                                        .unwrap_or_else(|| "<unavailable>".into());
+
+                                    let panic_log = std::env::temp_dir().join("voicewin_panic.log");
+
+                                    let msg = format!(
+                                        "Could not open logs.\n\nLog dir: {log_dir_display}\nExpected log file: {log_dir_display}/voicewin.log\nPanic log: {}\n\nErrors:\n{}",
+                                        panic_log.display(),
+                                        errors.join("\n")
+                                    );
+
+                                    log::error!("open_logs failed: {msg}");
+
+                                    app.dialog()
+                                        .message(msg)
+                                        .title("VoiceWin")
+                                        .kind(MessageDialogKind::Error)
+                                        .buttons(MessageDialogButtons::Ok)
+                                        .show(|_| {});
+                                }
+                            }
+
+                            #[cfg(windows)]
+                            {
+                                if let Ok(dir) = app.path().app_log_dir() {
                                     let _ =
                                         std::process::Command::new("explorer").arg(dir).status();
                                 }
 
-                                #[cfg(target_os = "macos")]
-                                {
-                                    let _ = std::process::Command::new("open").arg(dir).status();
-                                }
-
-                                #[cfg(all(not(windows), not(target_os = "macos")))]
-                                {
-                                    let _ =
-                                        std::process::Command::new("xdg-open").arg(dir).status();
-                                }
-                            }
-
-                            // If that fails, fall back to the panic log file in temp.
-                            #[cfg(windows)]
-                            {
+                                // If that fails, fall back to the panic log file in temp.
                                 let p = std::env::temp_dir().join("voicewin_panic.log");
                                 if p.exists() {
                                     let _ = std::process::Command::new("explorer").arg(p).status();
+                                }
+                            }
+
+                            #[cfg(all(not(windows), not(target_os = "macos")))]
+                            {
+                                if let Ok(dir) = app.path().app_log_dir() {
+                                    let _ =
+                                        std::process::Command::new("xdg-open").arg(dir).status();
                                 }
                             }
                         }

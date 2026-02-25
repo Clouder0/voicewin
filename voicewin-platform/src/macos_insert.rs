@@ -11,6 +11,12 @@
 
 use std::thread;
 use std::time::Duration;
+use std::{
+    any::Any,
+    ffi::c_void,
+    mem::MaybeUninit,
+    panic::{catch_unwind, resume_unwind, AssertUnwindSafe},
+};
 
 use core_foundation::array::CFArray;
 use core_foundation::base::TCFType;
@@ -52,8 +58,86 @@ unsafe extern "C" {
     fn TISSelectInputSource(inputSource: TISInputSourceRef) -> core_foundation::base::OSStatus;
 
     static kTISPropertyInputSourceID: CFStringRef;
-    static kTISPropertyInputSourceCategory: CFStringRef;
-    static kTISCategoryKeyboardInputSource: CFStringRef;
+}
+
+type DispatchQueueRef = *mut c_void;
+
+#[link(name = "dispatch")]
+unsafe extern "C" {
+    fn dispatch_get_main_queue() -> DispatchQueueRef;
+    fn dispatch_sync_f(
+        queue: DispatchQueueRef,
+        context: *mut c_void,
+        work: extern "C" fn(*mut c_void),
+    );
+}
+
+#[link(name = "pthread")]
+unsafe extern "C" {
+    fn pthread_main_np() -> i32;
+}
+
+struct MainQueueSyncContext<F, R> {
+    f: Option<F>,
+    result: MaybeUninit<R>,
+    panicked: Option<Box<dyn Any + Send + 'static>>,
+}
+
+extern "C" fn main_queue_sync_trampoline<F, R>(context: *mut c_void)
+where
+    F: FnOnce() -> R + Send,
+    R: Send,
+{
+    // SAFETY: The caller guarantees `context` is a valid pointer to
+    // `MainQueueSyncContext<F, R>` for the duration of this call.
+    let ctx = unsafe { &mut *(context as *mut MainQueueSyncContext<F, R>) };
+    let Some(f) = ctx.f.take() else {
+        return;
+    };
+
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(v) => {
+            ctx.result.write(v);
+        }
+        Err(panic) => {
+            ctx.panicked = Some(panic);
+        }
+    }
+}
+
+fn run_on_main_queue_sync<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R + Send,
+    R: Send,
+{
+    // On macOS 15+, some HIToolbox/TSM APIs (e.g. TIS/TSM input source functions)
+    // will hard-trap if called off the main dispatch queue.
+    //
+    // `dispatch_sync` to the main queue to guarantee correctness.
+    if unsafe { pthread_main_np() } != 0 {
+        return f();
+    }
+
+    let mut ctx = MainQueueSyncContext {
+        f: Some(f),
+        result: MaybeUninit::uninit(),
+        panicked: None,
+    };
+
+    unsafe {
+        dispatch_sync_f(
+            dispatch_get_main_queue(),
+            (&mut ctx as *mut MainQueueSyncContext<F, R>).cast::<c_void>(),
+            main_queue_sync_trampoline::<F, R>,
+        );
+    }
+
+    if let Some(panic) = ctx.panicked {
+        resume_unwind(panic);
+    }
+
+    // SAFETY: The trampoline always writes `result` if it did not panic.
+    unsafe { ctx.result.assume_init() }
 }
 
 pub(super) fn is_accessibility_trusted() -> bool {
@@ -95,83 +179,96 @@ fn is_us_qwerty_input_source_id(id: &str) -> bool {
     matches!(id, "com.apple.keylayout.ABC" | "com.apple.keylayout.US")
 }
 
+fn select_input_source_by_id_impl(id: &str) -> bool {
+    let key = unsafe { CFString::wrap_under_get_rule(kTISPropertyInputSourceID) };
+    let value = CFString::new(id);
+    let properties = CFDictionary::from_CFType_pairs(&[(key, value)]);
+
+    let list = unsafe { TISCreateInputSourceList(properties.as_concrete_TypeRef(), false) };
+    if list.is_null() {
+        log::warn!("Failed to query input source list for id={id}");
+        return false;
+    }
+
+    let sources: CFArray<*const c_void> = unsafe { TCFType::wrap_under_create_rule(list) };
+    let mut source: Option<TISInputSourceRef> = None;
+    for raw in sources.iter() {
+        source = Some(*raw as TISInputSourceRef);
+        break;
+    }
+
+    let Some(source) = source else {
+        log::warn!("No input source found for id={id}");
+        return false;
+    };
+
+    let status = unsafe { TISSelectInputSource(source) };
+    if status == 0 {
+        return true;
+    }
+
+    log::warn!("Failed to select input source id={id}: OSStatus={status}");
+    false
+}
+
+fn select_input_source_by_id(id: &str) -> bool {
+    run_on_main_queue_sync(|| select_input_source_by_id_impl(id))
+}
+
 struct KeyboardInputSourceGuard {
-    previous: TISInputSourceRef,
+    previous_id: Option<String>,
 }
 
 impl Drop for KeyboardInputSourceGuard {
     fn drop(&mut self) {
-        if self.previous.is_null() {
+        let Some(previous_id) = self.previous_id.take() else {
             return;
-        }
+        };
 
-        unsafe {
-            let _ = TISSelectInputSource(self.previous);
-            core_foundation::base::CFRelease(self.previous.cast());
+        let ok = select_input_source_by_id(previous_id.as_str());
+        if !ok {
+            log::warn!("Failed to restore input source after paste: id={previous_id}");
         }
     }
 }
 
 fn maybe_switch_to_us_qwerty_layout() -> Option<KeyboardInputSourceGuard> {
-    let current = unsafe { TISCopyCurrentKeyboardInputSource() };
-    if current.is_null() {
-        return None;
-    }
-
-    if let Some(id) = input_source_id(current) {
-        if is_us_qwerty_input_source_id(&id) {
-            unsafe {
-                core_foundation::base::CFRelease(current.cast());
-            }
+    run_on_main_queue_sync(|| {
+        let current = unsafe { TISCopyCurrentKeyboardInputSource() };
+        if current.is_null() {
             return None;
         }
-    }
 
-    let key_category = unsafe { CFString::wrap_under_get_rule(kTISPropertyInputSourceCategory) };
-    let value_keyboard = unsafe { CFString::wrap_under_get_rule(kTISCategoryKeyboardInputSource) };
-    let properties = CFDictionary::from_CFType_pairs(&[(key_category, value_keyboard)]);
-
-    let list = unsafe { TISCreateInputSourceList(properties.as_concrete_TypeRef(), false) };
-    if list.is_null() {
+        let previous_id = input_source_id(current);
         unsafe {
             core_foundation::base::CFRelease(current.cast());
         }
-        return None;
-    }
 
-    let sources: CFArray<*const std::ffi::c_void> =
-        unsafe { TCFType::wrap_under_create_rule(list) };
+        let Some(previous_id) = previous_id else {
+            return None;
+        };
 
-    let mut abc: Option<TISInputSourceRef> = None;
-    let mut us: Option<TISInputSourceRef> = None;
-    for raw in sources.iter() {
-        let source = *raw as TISInputSourceRef;
-        if let Some(id) = input_source_id(source) {
-            if id == "com.apple.keylayout.ABC" {
-                abc = Some(source);
-                break;
-            }
-            if id == "com.apple.keylayout.US" {
-                us = Some(source);
-            }
-        }
-    }
-
-    let target = abc.or(us);
-    if let Some(target) = target {
-        let status = unsafe { TISSelectInputSource(target) };
-        if status == 0 {
-            log::info!("Switched keyboard layout to US QWERTY for paste shortcut");
-            return Some(KeyboardInputSourceGuard { previous: current });
+        if is_us_qwerty_input_source_id(previous_id.as_str()) {
+            return None;
         }
 
-        log::warn!("Failed to switch keyboard layout for paste shortcut: OSStatus={status}");
-    }
+        let mut switched_to: Option<&'static str> = None;
+        if select_input_source_by_id_impl("com.apple.keylayout.ABC") {
+            switched_to = Some("com.apple.keylayout.ABC");
+        } else if select_input_source_by_id_impl("com.apple.keylayout.US") {
+            switched_to = Some("com.apple.keylayout.US");
+        }
 
-    unsafe {
-        core_foundation::base::CFRelease(current.cast());
-    }
-    None
+        let Some(target_id) = switched_to else {
+            log::warn!("Failed to switch keyboard layout for paste shortcut");
+            return None;
+        };
+
+        log::info!("Switched keyboard layout to {target_id} for paste shortcut");
+        Some(KeyboardInputSourceGuard {
+            previous_id: Some(previous_id),
+        })
+    })
 }
 
 #[derive(Debug, Clone)]
