@@ -25,6 +25,9 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Local worktrees
+.worktree/
+
 # Secrets
 .env
 .env.*
