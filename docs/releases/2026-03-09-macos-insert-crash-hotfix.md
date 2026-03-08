@@ -1,8 +1,10 @@
-# VoiceWin 0.1.1 macOS Insert Crash Hotfix Notes
+# VoiceWin 0.1.2 macOS Insert Crash Hotfix Notes
 
 ## What this hotfix addresses
 
-This `0.1.1` hotfix targets a macOS crash that could happen immediately after recording completed, during the text insertion step.
+This `0.1.2` hotfix targets a macOS crash that could happen immediately after recording completed, during the text insertion step.
+
+It supersedes the initial `0.1.1` cut after review tightened one macOS-only regression test and clarified the thread-affinity wording.
 
 The root cause was thread affinity: the session pipeline runs on a background Tokio task, but macOS pasteboard and related HIToolbox/AppKit calls must execute on the app's main-thread/main-queue boundary. The crash was reproducible from a stack ending in `dispatch_assert_queue` / `TSMGetInputSourceProperty` during the insert phase.
 
