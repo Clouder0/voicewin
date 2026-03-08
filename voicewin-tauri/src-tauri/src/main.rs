@@ -15,6 +15,11 @@ use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_store::StoreExt;
 
+const BUILD_GIT_SHA: &str = match option_env!("VOICEWIN_GIT_SHA") {
+    Some(sha) => sha,
+    None => "unknown",
+};
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct OverlayMovedPayload {
     x: i32,
@@ -1513,6 +1518,12 @@ fn main() {
             open_macos_microphone_settings,
         ])
         .setup(|app| {
+            log::info!(
+                "VoiceWin startup: version={} git_sha={}",
+                env!("CARGO_PKG_VERSION"),
+                BUILD_GIT_SHA
+            );
+
             let handle = app.handle();
 
             // Overlay window (hidden by default). This is the primary UX feedback surface.

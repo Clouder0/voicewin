@@ -140,6 +140,13 @@ where
     unsafe { ctx.result.assume_init() }
 }
 
+fn debug_assert_main_thread(where_: &str) {
+    debug_assert!(
+        unsafe { pthread_main_np() } != 0,
+        "{where_} must run on the main thread"
+    );
+}
+
 pub(super) fn is_accessibility_trusted() -> bool {
     // Mirror enigo's approach: AXIsProcessTrustedWithOptions({ prompt: false }).
     unsafe {
@@ -162,6 +169,8 @@ pub(super) fn prompt_accessibility_permission() -> bool {
 }
 
 fn input_source_id(source: TISInputSourceRef) -> Option<String> {
+    debug_assert_main_thread("input_source_id");
+
     if source.is_null() {
         return None;
     }
@@ -180,6 +189,8 @@ fn is_us_qwerty_input_source_id(id: &str) -> bool {
 }
 
 fn select_input_source_by_id_impl(id: &str) -> bool {
+    debug_assert_main_thread("select_input_source_by_id_impl");
+
     let key = unsafe { CFString::wrap_under_get_rule(kTISPropertyInputSourceID) };
     let value = CFString::new(id);
     let properties = CFDictionary::from_CFType_pairs(&[(key, value)]);
@@ -277,9 +288,39 @@ struct PasteboardItemSnapshot {
     types: Vec<(String, Vec<u8>)>,
 }
 
+#[derive(Debug, Clone)]
+struct PasteboardWriteState {
+    original_change: isize,
+    after_write_change: isize,
+    snapshot: Option<Vec<PasteboardItemSnapshot>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PasteboardRestoreOutcome {
+    Restored,
+    SkippedChanged,
+    SkippedSnapshotUnavailable,
+}
+
+impl PasteboardRestoreOutcome {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Restored => "restored",
+            Self::SkippedChanged => "skipped_changed",
+            Self::SkippedSnapshotUnavailable => "skipped_snapshot_unavailable",
+        }
+    }
+}
+
 const SNAPSHOT_MAX_TOTAL_BYTES: usize = 8 * 1024 * 1024;
 
+fn should_restore_pasteboard(current: isize, after_write: isize, original: isize) -> bool {
+    current == after_write || current == original
+}
+
 fn snapshot_pasteboard(pasteboard: &NSPasteboard) -> Option<Vec<PasteboardItemSnapshot>> {
+    debug_assert_main_thread("snapshot_pasteboard");
+
     let mut out: Vec<PasteboardItemSnapshot> = Vec::new();
     let mut total = 0usize;
 
@@ -327,6 +368,8 @@ fn snapshot_pasteboard(pasteboard: &NSPasteboard) -> Option<Vec<PasteboardItemSn
 }
 
 fn restore_pasteboard(pasteboard: &NSPasteboard, snapshot: &[PasteboardItemSnapshot]) {
+    debug_assert_main_thread("restore_pasteboard");
+
     pasteboard.clearContents();
 
     if snapshot.is_empty() {
@@ -360,6 +403,60 @@ fn restore_pasteboard(pasteboard: &NSPasteboard, snapshot: &[PasteboardItemSnaps
 
     let objects = NSArray::from_retained_slice(&as_proto);
     let _ = pasteboard.writeObjects(&objects);
+}
+
+fn capture_and_write_text_on_main(text: &str, trusted: bool) -> PasteboardWriteState {
+    run_on_main_queue_sync(|| {
+        debug_assert_main_thread("capture_and_write_text_on_main");
+
+        let pasteboard = NSPasteboard::generalPasteboard();
+        let original_change = pasteboard.changeCount();
+
+        let snapshot = if trusted {
+            snapshot_pasteboard(&pasteboard)
+        } else {
+            None
+        };
+
+        pasteboard.clearContents();
+
+        let ns_text = NSString::from_str(text);
+        let text_type: &NSPasteboardType = unsafe { NSPasteboardTypeString };
+        let _ = pasteboard.setString_forType(&ns_text, text_type);
+        let after_write_change = pasteboard.changeCount();
+
+        PasteboardWriteState {
+            original_change,
+            after_write_change,
+            snapshot,
+        }
+    })
+}
+
+fn restore_pasteboard_on_main_if_unchanged(
+    state: &PasteboardWriteState,
+) -> PasteboardRestoreOutcome {
+    run_on_main_queue_sync(|| {
+        debug_assert_main_thread("restore_pasteboard_on_main_if_unchanged");
+
+        let pasteboard = NSPasteboard::generalPasteboard();
+        let current_change = pasteboard.changeCount();
+        if !should_restore_pasteboard(
+            current_change,
+            state.after_write_change,
+            state.original_change,
+        ) {
+            return PasteboardRestoreOutcome::SkippedChanged;
+        }
+
+        if let Some(snapshot) = state.snapshot.as_deref() {
+            restore_pasteboard(&pasteboard, snapshot);
+            PasteboardRestoreOutcome::Restored
+        } else {
+            log::warn!("Skipping pasteboard restore: snapshot unavailable");
+            PasteboardRestoreOutcome::SkippedSnapshotUnavailable
+        }
+    })
 }
 
 fn post_cmd_v() -> anyhow::Result<()> {
@@ -419,25 +516,20 @@ fn post_enter() -> anyhow::Result<()> {
 
 pub fn paste_text_via_clipboard(text: &str, mode: InsertMode) -> anyhow::Result<()> {
     let trusted = is_accessibility_trusted();
+    log::info!(
+        "macOS insert phase=start trusted={} mode={:?} text_len={}",
+        trusted,
+        mode,
+        text.len()
+    );
 
-    let pasteboard = NSPasteboard::generalPasteboard();
-
-    let original_change = pasteboard.changeCount();
-
-    // Snapshot full pasteboard.
-    let snapshot = if trusted {
-        snapshot_pasteboard(&pasteboard)
-    } else {
-        None
-    };
-
-    // Write our text.
-    pasteboard.clearContents();
-
-    let ns_text = NSString::from_str(text);
-    let text_type: &NSPasteboardType = unsafe { NSPasteboardTypeString };
-    let _ = pasteboard.setString_forType(&ns_text, text_type);
-    let after_write_change = pasteboard.changeCount();
+    let write_state = capture_and_write_text_on_main(text, trusted);
+    log::info!(
+        "macOS insert phase=pasteboard_written trusted={} original_change={} after_write_change={}",
+        trusted,
+        write_state.original_change,
+        write_state.after_write_change
+    );
 
     // Small delay to ensure the target app sees clipboard update.
     thread::sleep(Duration::from_millis(50));
@@ -452,13 +544,16 @@ pub fn paste_text_via_clipboard(text: &str, mode: InsertMode) -> anyhow::Result<
 
     // Cmd+V uses a physical keycode. On non-US layouts, that key may not map to V,
     // so temporarily switch to an ASCII US layout before posting the shortcut.
+    log::info!("macOS insert phase=layout_switch_attempt");
     let _keyboard_layout_guard = maybe_switch_to_us_qwerty_layout();
 
     post_cmd_v()?;
+    log::info!("macOS insert phase=paste_posted");
 
     if matches!(mode, InsertMode::PasteAndEnter) {
         thread::sleep(Duration::from_millis(50));
         post_enter()?;
+        log::info!("macOS insert phase=enter_posted");
     }
 
     // macOS has no Shift+Insert paste convention; treat it like regular paste.
@@ -467,21 +562,22 @@ pub fn paste_text_via_clipboard(text: &str, mode: InsertMode) -> anyhow::Result<
     // Restore pasteboard after a delay, but only if the user/app hasn't changed it.
     thread::sleep(Duration::from_millis(1000));
 
-    let current_change = pasteboard.changeCount();
-    if current_change == after_write_change || current_change == original_change {
-        if let Some(snapshot) = snapshot.as_deref() {
-            restore_pasteboard(&pasteboard, snapshot);
-        } else {
-            log::warn!("Skipping pasteboard restore: snapshot unavailable");
-        }
-    }
+    let restore = restore_pasteboard_on_main_if_unchanged(&write_state);
+    log::info!("macOS insert phase=restore outcome={}", restore.as_str());
 
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::is_us_qwerty_input_source_id;
+    use super::{
+        is_us_qwerty_input_source_id, run_on_main_queue_sync, should_restore_pasteboard,
+        PasteboardWriteState,
+    };
+
+    unsafe extern "C" {
+        fn pthread_main_np() -> i32;
+    }
 
     #[test]
     fn accepts_supported_us_layout_ids() {
@@ -492,5 +588,36 @@ mod tests {
     #[test]
     fn rejects_non_us_layout_ids() {
         assert!(!is_us_qwerty_input_source_id("com.apple.keylayout.German"));
+    }
+
+    #[test]
+    #[ignore = "requires a live macOS main queue / runloop"]
+    fn run_on_main_queue_sync_hops_from_worker_thread() {
+        let on_main =
+            std::thread::spawn(|| run_on_main_queue_sync(|| unsafe { pthread_main_np() != 0 }))
+                .join()
+                .unwrap();
+
+        assert!(on_main);
+    }
+
+    #[test]
+    fn should_restore_pasteboard_only_when_change_count_matches_expected_values() {
+        assert!(should_restore_pasteboard(10, 10, 7));
+        assert!(should_restore_pasteboard(7, 10, 7));
+        assert!(!should_restore_pasteboard(11, 10, 7));
+    }
+
+    #[test]
+    fn pasteboard_write_state_carries_only_plain_rust_data() {
+        let state = PasteboardWriteState {
+            original_change: 1,
+            after_write_change: 2,
+            snapshot: None,
+        };
+
+        assert_eq!(state.original_change, 1);
+        assert_eq!(state.after_write_change, 2);
+        assert!(state.snapshot.is_none());
     }
 }
