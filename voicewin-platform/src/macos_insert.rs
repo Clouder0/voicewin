@@ -40,6 +40,11 @@ struct __TISInputSource {
 }
 type TISInputSourceRef = *const __TISInputSource;
 
+#[repr(C)]
+struct __DispatchObject {
+    _private: [u8; 0],
+}
+
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
     fn AXIsProcessTrustedWithOptions(options: *const AnyObject) -> bool;
@@ -64,15 +69,18 @@ unsafe extern "C" {
 
 type DispatchQueueRef = *mut c_void;
 
-// Grand Central Dispatch symbols are provided by libSystem on macOS.
 #[link(name = "System", kind = "dylib")]
 unsafe extern "C" {
-    fn dispatch_get_main_queue() -> DispatchQueueRef;
+    static _dispatch_main_q: __DispatchObject;
     fn dispatch_sync_f(
         queue: DispatchQueueRef,
         context: *mut c_void,
         work: extern "C" fn(*mut c_void),
     );
+}
+
+fn dispatch_get_main_queue() -> DispatchQueueRef {
+    unsafe { &_dispatch_main_q as *const _ as DispatchQueueRef }
 }
 
 #[link(name = "pthread")]

@@ -36,7 +36,7 @@
 - 2026-03-09: `cargo test -p voicewin-platform --target aarch64-apple-darwin --no-run` is blocked in this environment by missing Apple cross-compilation tooling (`ring` fails while invoking Linux `cc` with macOS flags).
 - Remaining verification for Task 4 requires a real macOS environment: local `.app` build, manual paste regression matrix, and artifact validation.
 - 2026-03-09: release/handoff notes drafted in `docs/releases/2026-03-09-macos-insert-crash-hotfix.md`.
-- 2026-03-09: release version updated to `0.1.3`, superseding the earlier `0.1.1` / `0.1.2` cuts after fixing the macOS CI linkage regression while still advancing from the crashing `0.1.0` build.
+- 2026-03-09: release version updated to `0.1.4`, superseding the earlier `0.1.1` / `0.1.2` / `0.1.3` cuts after fixing the macOS CI linkage regression while still advancing from the crashing `0.1.0` build.
 
 ---
 
