@@ -35,7 +35,9 @@ use objc2_foundation::{NSArray, NSData, NSString};
 use voicewin_core::types::InsertMode;
 
 #[repr(C)]
-struct __TISInputSource;
+struct __TISInputSource {
+    _private: [u8; 0],
+}
 type TISInputSourceRef = *const __TISInputSource;
 
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -62,7 +64,8 @@ unsafe extern "C" {
 
 type DispatchQueueRef = *mut c_void;
 
-#[link(name = "dispatch")]
+// Grand Central Dispatch symbols are provided by libSystem on macOS.
+#[link(name = "System", kind = "dylib")]
 unsafe extern "C" {
     fn dispatch_get_main_queue() -> DispatchQueueRef;
     fn dispatch_sync_f(

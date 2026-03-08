@@ -1,6 +1,6 @@
 [package]
 name = "voicewin-tauri"
-version = "0.1.2"
+version = "0.1.3"
 description = "VoiceWin (Tauri)"
 authors = ["VoiceWin"]
 edition = "2021"
