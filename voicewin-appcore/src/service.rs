@@ -353,9 +353,21 @@ impl AppService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use voicewin_engine::traits::Inserter;
     use voicewin_core::enhancement::{PromptMode, PromptTemplate};
     use voicewin_core::power_mode::GlobalDefaults;
     use voicewin_core::types::{InsertMode, PromptId};
+    use voicewin_runtime::history::HistoryStore;
+
+    struct FailingInserter;
+
+    #[async_trait]
+    impl Inserter for FailingInserter {
+        async fn insert(&self, _text: &str, _mode: InsertMode) -> anyhow::Result<()> {
+            anyhow::bail!("simulated insert failure")
+        }
+    }
 
     #[test]
     fn microphone_change_is_detected() {
@@ -460,5 +472,80 @@ mod tests {
                 audio,
             )
             .await;
+    }
+
+    #[tokio::test]
+    async fn insertion_failure_merges_warning_and_persists_recovered_text_to_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+
+        let ctx = voicewin_platform::test::TestContextProvider::new(
+            voicewin_core::types::AppIdentity::new().with_process_name("slack.exe"),
+            Default::default(),
+        )
+        .boxed();
+
+        let svc = AppService::new(config_path.clone(), ctx, Arc::new(FailingInserter));
+
+        let cfg = AppConfig {
+            defaults: GlobalDefaults {
+                enable_enhancement: false,
+                prompt_id: None,
+                insert_mode: InsertMode::Paste,
+                stt_provider: "local".into(),
+                stt_model: "./missing.bin".into(),
+                language: "en".into(),
+                llm_base_url: "https://example.com/v1".into(),
+                llm_model: "gpt-4o-mini".into(),
+                microphone_device: None,
+                microphone_device_id: None,
+                history_enabled: true,
+                context: voicewin_core::context::ContextToggles::default(),
+            },
+            profiles: vec![],
+            prompts: vec![PromptTemplate {
+                id: PromptId::new(),
+                title: "Default".into(),
+                mode: PromptMode::Enhancer,
+                prompt_text: "Fix.".into(),
+                trigger_words: vec!["rewrite".into()],
+            }],
+            llm_api_key_present: false,
+        };
+
+        svc.save_config(&cfg).unwrap();
+
+        let res = svc
+            .run_session(
+                RunSessionRequest {
+                    transcript: "hello world".into(),
+                    warning: Some("Realtime warning".into()),
+                },
+                AudioInput {
+                    sample_rate_hz: 16_000,
+                    samples: vec![0.0; 160],
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.stage, "failed");
+        assert_eq!(res.final_text.as_deref(), Some("hello world"));
+        assert_eq!(
+            res.error.as_deref(),
+            Some("simulated insert failure | Realtime warning")
+        );
+
+        let history = HistoryStore::at_path(dir.path().join("history.json"))
+            .load()
+            .unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].text, "hello world");
+        assert_eq!(history[0].stage, "failed");
+        assert_eq!(
+            history[0].error.as_deref(),
+            Some("simulated insert failure | Realtime warning")
+        );
+        assert_eq!(history[0].app_process_name.as_deref(), Some("slack.exe"));
     }
 }

@@ -17,6 +17,8 @@ impl std::fmt::Debug for ElevenLabsSttConfig {
     }
 }
 
+const DEFAULT_ELEVENLABS_STT_URL: &str = "https://api.elevenlabs.io/v1/speech-to-text";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioFile {
     pub filename: String,
@@ -53,7 +55,7 @@ pub fn build_elevenlabs_stt_request(cfg: &ElevenLabsSttConfig, audio: &AudioFile
 
     HttpRequest {
         method: "POST".into(),
-        url: "https://api.elevenlabs.io/v1/speech-to-text".into(),
+        url: elevenlabs_stt_url(),
         headers: vec![
             (
                 "Content-Type".into(),
@@ -66,6 +68,13 @@ pub fn build_elevenlabs_stt_request(cfg: &ElevenLabsSttConfig, audio: &AudioFile
             boundary,
             bytes: body,
         },
+    }
+}
+
+fn elevenlabs_stt_url() -> String {
+    match std::env::var("VOICEWIN_ELEVENLABS_STT_URL") {
+        Ok(url) if !url.trim().is_empty() => url.trim().to_string(),
+        _ => DEFAULT_ELEVENLABS_STT_URL.to_string(),
     }
 }
 
@@ -102,9 +111,49 @@ fn append_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct ScopedEnvVar {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl ScopedEnvVar {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = std::env::var(key).ok();
+            unsafe { std::env::set_var(key, value) };
+            Self { key, original }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let original = std::env::var(key).ok();
+            unsafe { std::env::remove_var(key) };
+            Self { key, original }
+        }
+    }
+
+    impl Drop for ScopedEnvVar {
+        fn drop(&mut self) {
+            match self.original.as_ref() {
+                Some(value) => unsafe { std::env::set_var(self.key, value) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
+
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     #[test]
     fn builds_multipart_with_xi_api_key() {
+        let _guard = env_guard();
+        let _url = ScopedEnvVar::remove("VOICEWIN_ELEVENLABS_STT_URL");
+
         let cfg = ElevenLabsSttConfig {
             api_key: "k".into(),
             model_id: "scribe_v2".into(),
@@ -136,5 +185,29 @@ mod tests {
             }
             _ => panic!("expected multipart"),
         }
+    }
+
+    #[test]
+    fn honors_stt_url_override_from_environment() {
+        let _guard = env_guard();
+        let _url = ScopedEnvVar::set(
+            "VOICEWIN_ELEVENLABS_STT_URL",
+            "  http://127.0.0.1:9/mock-stt  ",
+        );
+
+        let cfg = ElevenLabsSttConfig {
+            api_key: "k".into(),
+            model_id: "scribe_v2".into(),
+            language_code: None,
+        };
+        let audio = AudioFile {
+            filename: "a.pcm".into(),
+            mime_type: "application/octet-stream".into(),
+            bytes: vec![1, 2, 3],
+        };
+
+        let req = build_elevenlabs_stt_request(&cfg, &audio);
+
+        assert_eq!(req.url, "http://127.0.0.1:9/mock-stt");
     }
 }

@@ -242,13 +242,15 @@ export function ModelsPage() {
                         }));
                         // Fire-and-forget: progress comes via events, completion via done event.
                         void invoke('download_model', { modelId: m.id }).catch((e) => {
-                          setError(String(e));
+                          const message = String(e);
                           setProgress((prev) => {
                             const next = { ...prev };
                             delete next[m.id];
                             return next;
                           });
-                          void refresh();
+                          void refresh().finally(() => {
+                            setError(message);
+                          });
                         });
                       } catch (e) {
                         setError(String(e));

@@ -17,5 +17,6 @@ voicewin-runtime = { path = "../voicewin-runtime" }
 voicewin-audio = { path = "../voicewin-audio" }
 
 [dev-dependencies]
+async-trait = "0.1"
 tempfile = "3"
 wiremock = "0.6"

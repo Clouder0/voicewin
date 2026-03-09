@@ -12,10 +12,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tempfile = "3"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 whisper-rs = "0.15.1"
 sha2 = "0.10"
 voicewin-core = { path = "../voicewin-core" }
 voicewin-engine = { path = "../voicewin-engine" }
 voicewin-platform = { path = "../voicewin-platform" }
 voicewin-providers = { path = "../voicewin-providers" }
+
+[dev-dependencies]
+hound = "3"
+wiremock = "0.6"

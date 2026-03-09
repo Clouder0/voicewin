@@ -5509,6 +5509,7 @@ dependencies = [
  "tauri-plugin-log",
  "tauri-plugin-single-instance",
  "tauri-plugin-store",
+ "tempfile",
  "tokio",
  "voicewin-appcore",
  "voicewin-audio",

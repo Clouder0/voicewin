@@ -19,11 +19,11 @@ anyhow = "1"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tauri = { version = "2", features = ["tray-icon", "protocol-asset", "image-png", "image-ico", "macos-private-api"] }
+tauri = { version = "2", features = ["tray-icon", "protocol-asset", "image-png", "image-ico", "macos-private-api", "test"] }
 tauri-plugin-log = "2"
 tauri-plugin-store = "2"
 tauri-plugin-dialog = "2"
-tokio = { version = "1", features = ["sync", "time"] }
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 reqwest = { version = "0.12", default-features = true, features = ["stream"] }
 futures-util = "0.3"
 sha2 = "0.10"
@@ -44,3 +44,6 @@ tauri-plugin-global-shortcut = "2"
 # Adding an empty workspace table avoids Cargo "workspace" errors
 # when running commands from within this directory.
 [workspace]
+
+[dev-dependencies]
+tempfile = "3"

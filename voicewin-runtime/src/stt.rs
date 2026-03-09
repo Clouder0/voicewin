@@ -179,4 +179,15 @@ mod tests {
         let pcm = encode_pcm_s16le_mono(&[0.0, 1.0, -1.0]);
         assert_eq!(pcm.len(), 3 * 2);
     }
+
+    #[test]
+    fn pcm_s16le_clamps_and_rounds_samples() {
+        let pcm = encode_pcm_s16le_mono(&[-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5]);
+        let samples: Vec<i16> = pcm
+            .chunks_exact(2)
+            .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect();
+
+        assert_eq!(samples, vec![-32767, -32767, -16384, 0, 16384, 32767, 32767]);
+    }
 }
