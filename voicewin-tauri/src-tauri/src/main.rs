@@ -95,6 +95,7 @@ const BUNDLED_TINY_MODEL_ID: &str = "whisper-tiny-bundled";
 use voicewin_audio::{AudioInputDeviceInfo, AudioRecorder};
 
 mod session_controller;
+mod startup_smoke;
 mod tray_icon;
 use session_controller::{SessionController, ToggleResult};
 
@@ -1423,6 +1424,13 @@ async fn open_macos_microphone_settings() -> Result<(), String> {
 }
 
 fn main() {
+    let startup_smoke_enabled = std::env::var(startup_smoke::STARTUP_SMOKE_ENABLE_ENV).ok();
+    let smoke_mode = startup_smoke::startup_smoke_mode(
+        startup_smoke_enabled.as_deref(),
+        env!("CARGO_PKG_VERSION"),
+        BUILD_GIT_SHA,
+    );
+
     // If we crash/panic on end-user machines, a stderr backtrace is often not available.
     // Write panics to a predictable temp file to aid debugging.
     {
@@ -1517,12 +1525,27 @@ fn main() {
             #[cfg(target_os = "macos")]
             open_macos_microphone_settings,
         ])
-        .setup(|app| {
+        .setup(move |app| {
             log::info!(
-                "VoiceWin startup: version={} git_sha={}",
-                env!("CARGO_PKG_VERSION"),
-                BUILD_GIT_SHA
+                "{}",
+                startup_smoke::startup_provenance_log(env!("CARGO_PKG_VERSION"), BUILD_GIT_SHA)
             );
+
+            if let Some(smoke_mode) = smoke_mode.as_ref() {
+                let mut stdout = std::io::stdout();
+                if let Err(error) = startup_smoke::write_startup_smoke_process_output(
+                    &mut stdout,
+                    smoke_mode,
+                    env!("CARGO_PKG_VERSION"),
+                    BUILD_GIT_SHA,
+                ) {
+                    log::error!("failed to write startup smoke output: {error}");
+                }
+                let _ = std::io::Write::flush(&mut stdout);
+                log::info!("{}", smoke_mode.marker);
+                app.handle().exit(0);
+                return Ok(());
+            }
 
             let handle = app.handle();
 
