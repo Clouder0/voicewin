@@ -114,3 +114,15 @@ jobs:
           name: VoiceWin-windows-startup-smoke-logs
           path: voicewin-tauri/src-tauri/target/ci-smoke/windows/*
           if-no-files-found: warn
+
+      - name: Run packaged runtime smoke
+        shell: pwsh
+        run: pwsh -NoLogo -NoProfile -File scripts/ci/run-windows-runtime-smoke.ps1
+
+      - name: Upload Windows runtime smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoiceWin-windows-runtime-smoke-logs
+          path: voicewin-tauri/src-tauri/target/ci-smoke/windows-runtime/*
+          if-no-files-found: warn

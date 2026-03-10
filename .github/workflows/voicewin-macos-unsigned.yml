@@ -168,3 +168,15 @@ jobs:
           name: VoiceWin-macos-startup-smoke-logs
           path: voicewin-tauri/src-tauri/target/ci-smoke/macos/*
           if-no-files-found: warn
+
+      - name: Run packaged runtime smoke
+        shell: bash
+        run: bash scripts/ci/run-macos-runtime-smoke.sh
+
+      - name: Upload macOS runtime smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoiceWin-macos-runtime-smoke-logs
+          path: voicewin-tauri/src-tauri/target/ci-smoke/macos-runtime/*
+          if-no-files-found: warn

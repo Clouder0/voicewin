@@ -95,6 +95,7 @@ const BUNDLED_TINY_MODEL_ID: &str = "whisper-tiny-bundled";
 use voicewin_audio::{AudioInputDeviceInfo, AudioRecorder};
 
 mod session_controller;
+mod runtime_smoke;
 mod startup_smoke;
 mod tray_icon;
 use session_controller::{SessionController, ToggleResult};
@@ -216,7 +217,7 @@ fn ensure_bootstrap_model(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
     Ok(dst)
 }
 
-async fn build_service(app: &tauri::AppHandle) -> anyhow::Result<AppService> {
+async fn build_service_base(app: &tauri::AppHandle) -> anyhow::Result<AppService> {
     let config_path = default_config_path(app)?;
     log::info!("build_service config_path: {}", config_path.display());
 
@@ -249,7 +250,11 @@ async fn build_service(app: &tauri::AppHandle) -> anyhow::Result<AppService> {
     let inserter: Arc<dyn voicewin_engine::traits::Inserter> =
         Arc::new(voicewin_platform::test::StdoutInserter);
 
-    let svc = AppService::new(config_path, ctx, inserter);
+    Ok(AppService::new(config_path, ctx, inserter))
+}
+
+async fn build_service(app: &tauri::AppHandle) -> anyhow::Result<AppService> {
+    let svc = build_service_base(app).await?;
 
     // Tray/hotkey flows can start sessions without ever opening the main UI.
     // Ensure config exists (and is valid) during service initialization so
@@ -277,7 +282,7 @@ async fn build_service(app: &tauri::AppHandle) -> anyhow::Result<AppService> {
     Ok(svc)
 }
 
-fn init_default_config(svc: &AppService, app: &tauri::AppHandle) -> Result<AppConfig, String> {
+fn default_config_for_app(svc: &AppService, app: &tauri::AppHandle) -> Result<AppConfig, String> {
     let mut d = voicewin_runtime::defaults::default_global_defaults();
 
     // Prefer the user-installed "preferred" model if present.
@@ -299,8 +304,37 @@ fn init_default_config(svc: &AppService, app: &tauri::AppHandle) -> Result<AppCo
         llm_api_key_present: svc.get_openai_api_key_present().unwrap_or(false),
     };
 
+    Ok(cfg)
+}
+
+fn init_default_config(svc: &AppService, app: &tauri::AppHandle) -> Result<AppConfig, String> {
+    let cfg = default_config_for_app(svc, app)?;
     svc.save_config(&cfg).map_err(|e| e.to_string())?;
     Ok(cfg)
+}
+
+fn runtime_smoke_config(svc: &AppService, app: &tauri::AppHandle) -> Result<AppConfig, String> {
+    let mut smoke_defaults = voicewin_runtime::defaults::default_global_defaults();
+    let bootstrap_model_path = ensure_bootstrap_model(app).map_err(|e| e.to_string())?;
+    smoke_defaults.stt_model = bootstrap_model_path.to_string_lossy().to_string();
+
+    Ok(runtime_smoke::deterministic_runtime_smoke_config(
+        AppConfig {
+            defaults: smoke_defaults.clone(),
+            profiles: vec![],
+            prompts: vec![],
+            llm_api_key_present: svc.get_openai_api_key_present().unwrap_or(false),
+        },
+        smoke_defaults,
+    ))
+}
+
+async fn build_runtime_smoke_service(
+    app: &tauri::AppHandle,
+) -> anyhow::Result<(AppService, AppConfig)> {
+    let svc = build_service_base(app).await?;
+    let cfg = runtime_smoke_config(&svc, app).map_err(anyhow::Error::msg)?;
+    Ok((svc, cfg))
 }
 
 fn load_or_init_config(svc: &AppService, app: &tauri::AppHandle) -> Result<AppConfig, String> {
@@ -1423,6 +1457,143 @@ async fn open_macos_microphone_settings() -> Result<(), String> {
     }
 }
 
+fn emit_runtime_smoke_process_output(marker: &str) {
+    let mut stdout = std::io::stdout();
+    if let Err(error) = runtime_smoke::write_runtime_smoke_process_output(&mut stdout, marker) {
+        log::error!("failed to write runtime smoke output: {error}");
+    } else {
+        let _ = std::io::Write::flush(&mut stdout);
+    }
+    log::info!("{marker}");
+}
+
+fn emit_runtime_smoke_start_process_output(smoke_mode: &runtime_smoke::RuntimeSmokeMode) {
+    let mut stdout = std::io::stdout();
+    if let Err(error) = runtime_smoke::write_runtime_smoke_start_process_output(
+        &mut stdout,
+        smoke_mode,
+        env!("CARGO_PKG_VERSION"),
+        BUILD_GIT_SHA,
+    ) {
+        log::error!("failed to write runtime smoke start output: {error}");
+    } else {
+        let _ = std::io::Write::flush(&mut stdout);
+    }
+    log::info!("{}", smoke_mode.start_marker);
+}
+
+async fn run_runtime_smoke(
+    app: tauri::AppHandle,
+    smoke_mode: Result<runtime_smoke::RuntimeSmokeMode, String>,
+) -> i32 {
+    let smoke_mode = match smoke_mode {
+        Ok(smoke_mode) => smoke_mode,
+        Err(error) => {
+            log::error!("runtime smoke env invalid: {error}");
+            emit_runtime_smoke_process_output(&runtime_smoke::runtime_smoke_failure_marker(
+                env!("CARGO_PKG_VERSION"),
+                BUILD_GIT_SHA,
+                "invalid_env",
+            ));
+            return 2;
+        }
+    };
+
+    emit_runtime_smoke_start_process_output(&smoke_mode);
+    emit_runtime_smoke_process_output(
+        &smoke_mode.stage_marker(runtime_smoke::RUNTIME_SMOKE_STAGE_REFOCUS_DELAY),
+    );
+    tokio::time::sleep(runtime_smoke::RUNTIME_SMOKE_REFOCUS_DELAY).await;
+
+    emit_runtime_smoke_process_output(
+        &smoke_mode.stage_marker(runtime_smoke::RUNTIME_SMOKE_STAGE_BUILD_SERVICE),
+    );
+    let (svc, smoke_cfg) = match build_runtime_smoke_service(&app).await {
+        Ok(value) => value,
+        Err(error) => {
+            log::error!("runtime smoke build_service failed: {error}");
+            emit_runtime_smoke_process_output(&smoke_mode.failure_marker("build_service"));
+            return 1;
+        }
+    };
+
+    if smoke_mode.expected_foreground_process.is_some() {
+        emit_runtime_smoke_process_output(
+            &smoke_mode.stage_marker(runtime_smoke::RUNTIME_SMOKE_STAGE_CAPTURE_FOREGROUND),
+        );
+
+        let foreground = match svc.get_foreground_app().await {
+            Ok(foreground) => foreground,
+            Err(error) => {
+                log::error!("runtime smoke foreground capture failed: {error}");
+                emit_runtime_smoke_process_output(&smoke_mode.failure_marker("foreground_capture"));
+                return 1;
+            }
+        };
+
+        let actual_process_name = foreground.process_name.as_ref().map(|name| name.0.as_str());
+        if !runtime_smoke::foreground_process_matches(
+            actual_process_name,
+            smoke_mode.expected_foreground_process.as_deref(),
+        ) {
+            log::error!(
+                "runtime smoke foreground mismatch: expected={:?} actual={actual_process_name:?}",
+                smoke_mode.expected_foreground_process.as_deref(),
+            );
+            emit_runtime_smoke_process_output(&smoke_mode.failure_marker("foreground_mismatch"));
+            return 1;
+        }
+    }
+
+    emit_runtime_smoke_process_output(
+        &smoke_mode.stage_marker(runtime_smoke::RUNTIME_SMOKE_STAGE_SESSION),
+    );
+    let response = match svc
+        .run_session_with_hook_using_config(
+            smoke_cfg,
+            voicewin_runtime::ipc::RunSessionRequest {
+                transcript: smoke_mode.transcript.clone(),
+                warning: None,
+            },
+            voicewin_engine::traits::AudioInput {
+                sample_rate_hz: 16_000,
+                samples: Vec::new(),
+            },
+            |stage| {
+                let marker = runtime_smoke::runtime_smoke_stage_marker(stage);
+                async move {
+                    emit_runtime_smoke_process_output(&marker);
+                }
+            },
+        )
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            log::error!("runtime smoke session execution failed: {error}");
+            emit_runtime_smoke_process_output(&smoke_mode.failure_marker("run_session"));
+            return 1;
+        }
+    };
+
+    emit_runtime_smoke_process_output(&smoke_mode.stage_marker(&response.stage));
+    if response.stage == "done" {
+        if let Some(warning) = response.error.as_deref().filter(|warning| !warning.trim().is_empty()) {
+            log::warn!("runtime smoke completed with non-fatal warning: {warning}");
+        }
+        emit_runtime_smoke_process_output(&smoke_mode.success_marker);
+        return 0;
+    }
+
+    if let Some(error) = response.error.as_deref() {
+        log::error!("runtime smoke failed: stage={} error={error}", response.stage);
+    } else {
+        log::error!("runtime smoke failed: stage={}", response.stage);
+    }
+    emit_runtime_smoke_process_output(&smoke_mode.failure_marker("run_session"));
+    1
+}
+
 fn main() {
     let startup_smoke_enabled = std::env::var(startup_smoke::STARTUP_SMOKE_ENABLE_ENV).ok();
     let smoke_mode = startup_smoke::startup_smoke_mode(
@@ -1430,6 +1601,20 @@ fn main() {
         env!("CARGO_PKG_VERSION"),
         BUILD_GIT_SHA,
     );
+    let runtime_smoke_enabled = std::env::var(runtime_smoke::RUNTIME_SMOKE_ENABLE_ENV).ok();
+    let runtime_smoke_transcript = std::env::var(runtime_smoke::RUNTIME_SMOKE_TRANSCRIPT_ENV).ok();
+    let runtime_smoke_expected_process =
+        std::env::var(runtime_smoke::RUNTIME_SMOKE_EXPECT_PROCESS_ENV).ok();
+    let runtime_smoke_requested =
+        runtime_smoke::runtime_smoke_enabled(runtime_smoke_enabled.as_deref());
+    let runtime_smoke_mode = runtime_smoke::runtime_smoke_mode(
+        runtime_smoke_enabled.as_deref(),
+        runtime_smoke_transcript.as_deref(),
+        runtime_smoke_expected_process.as_deref(),
+        env!("CARGO_PKG_VERSION"),
+        BUILD_GIT_SHA,
+    );
+    let skip_single_instance = smoke_mode.is_some() || runtime_smoke_requested;
 
     // If we crash/panic on end-user machines, a stderr backtrace is often not available.
     // Write panics to a predictable temp file to aid debugging.
@@ -1458,7 +1643,7 @@ fn main() {
     // `windows_subsystem = "windows"` builds (no console output).
     use tauri_plugin_log::{Target, TargetKind};
 
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(log::LevelFilter::Info)
@@ -1469,14 +1654,18 @@ fn main() {
         )
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build());
+    if !skip_single_instance {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // If a second instance is launched, bring the existing window to the front.
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.show();
                 let _ = w.set_focus();
             }
-        }))
+        }));
+    }
+
+    builder
         .manage(AppState {
             service: Arc::new(tokio::sync::OnceCell::new()),
             session: SessionController::new(),
@@ -1544,6 +1733,22 @@ fn main() {
                 let _ = std::io::Write::flush(&mut stdout);
                 log::info!("{}", smoke_mode.marker);
                 app.handle().exit(0);
+                return Ok(());
+            }
+
+            if runtime_smoke_requested {
+                if let Some(main_window) = app.get_webview_window("main") {
+                    let _ = main_window.hide();
+                }
+
+                let handle = app.handle().clone();
+                let runtime_smoke_mode = runtime_smoke_mode.clone().and_then(|mode| {
+                    mode.ok_or_else(|| "runtime smoke requested but mode was unavailable".to_string())
+                });
+                tauri::async_runtime::spawn(async move {
+                    let exit_code = run_runtime_smoke(handle.clone(), runtime_smoke_mode).await;
+                    handle.exit(exit_code);
+                });
                 return Ok(());
             }
 

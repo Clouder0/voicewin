@@ -245,7 +245,36 @@ impl AppService {
         Fut: Future<Output = ()> + Send,
     {
         let cfg = self.config_store.load()?;
+        self.run_session_with_loaded_config(cfg, req, audio, on_stage)
+            .await
+    }
 
+    pub async fn run_session_with_hook_using_config<F, Fut>(
+        &self,
+        cfg: AppConfig,
+        req: RunSessionRequest,
+        audio: AudioInput,
+        on_stage: F,
+    ) -> anyhow::Result<RunSessionResponse>
+    where
+        F: Fn(&'static str) -> Fut + Send + Sync,
+        Fut: Future<Output = ()> + Send,
+    {
+        self.run_session_with_loaded_config(cfg, req, audio, on_stage)
+            .await
+    }
+
+    async fn run_session_with_loaded_config<F, Fut>(
+        &self,
+        cfg: AppConfig,
+        req: RunSessionRequest,
+        audio: AudioInput,
+        on_stage: F,
+    ) -> anyhow::Result<RunSessionResponse>
+    where
+        F: Fn(&'static str) -> Fut + Send + Sync,
+        Fut: Future<Output = ()> + Send,
+    {
         // Split request fields so we can move transcript into the engine call.
         let RunSessionRequest {
             transcript,
@@ -355,6 +384,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use voicewin_engine::traits::Inserter;
+    use voicewin_platform::test::MemoryInserter;
     use voicewin_core::enhancement::{PromptMode, PromptTemplate};
     use voicewin_core::power_mode::GlobalDefaults;
     use voicewin_core::types::{InsertMode, PromptId};
@@ -547,5 +577,127 @@ mod tests {
             Some("simulated insert failure | Realtime warning")
         );
         assert_eq!(history[0].app_process_name.as_deref(), Some("slack.exe"));
+    }
+
+    #[tokio::test]
+    async fn explicit_run_config_overrides_persisted_insert_mode_without_mutating_disk_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+
+        let ctx = voicewin_platform::test::TestContextProvider::new(
+            voicewin_core::types::AppIdentity::new().with_process_name("notepad.exe"),
+            Default::default(),
+        )
+        .boxed();
+        let inserter = Arc::new(MemoryInserter::default());
+
+        let svc = AppService::new(config_path.clone(), ctx, inserter.clone());
+
+        let persisted = AppConfig {
+            defaults: GlobalDefaults {
+                enable_enhancement: false,
+                prompt_id: None,
+                insert_mode: InsertMode::PasteAndEnter,
+                stt_provider: "local".into(),
+                stt_model: "./missing.bin".into(),
+                language: "en".into(),
+                llm_base_url: "https://example.com/v1".into(),
+                llm_model: "gpt-4o-mini".into(),
+                microphone_device: None,
+                microphone_device_id: None,
+                history_enabled: true,
+                context: voicewin_core::context::ContextToggles::default(),
+            },
+            profiles: vec![],
+            prompts: vec![],
+            llm_api_key_present: false,
+        };
+        svc.save_config(&persisted).unwrap();
+
+        let mut override_cfg = persisted.clone();
+        override_cfg.defaults.insert_mode = InsertMode::Paste;
+
+        let response = svc
+            .run_session_with_hook_using_config(
+                override_cfg,
+                RunSessionRequest {
+                    transcript: "hello world".into(),
+                    warning: None,
+                },
+                AudioInput {
+                    sample_rate_hz: 16_000,
+                    samples: vec![],
+                },
+                |_stage| async {},
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.stage, "done");
+
+        let inserted = inserter.inserted.lock().unwrap();
+        assert_eq!(inserted.len(), 1);
+        assert_eq!(inserted[0], ("hello world".into(), InsertMode::Paste));
+        drop(inserted);
+
+        let loaded = svc.load_config().unwrap();
+        assert_eq!(loaded.defaults.insert_mode, InsertMode::PasteAndEnter);
+    }
+
+    #[tokio::test]
+    async fn transcript_override_does_not_touch_local_model_path_during_explicit_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+
+        let ctx = voicewin_platform::test::TestContextProvider::new(
+            voicewin_core::types::AppIdentity::new().with_process_name("textedit"),
+            Default::default(),
+        )
+        .boxed();
+        let inserter = Arc::new(MemoryInserter::default());
+
+        let svc = AppService::new(config_path, ctx, inserter.clone());
+        let cfg = AppConfig {
+            defaults: GlobalDefaults {
+                enable_enhancement: false,
+                prompt_id: None,
+                insert_mode: InsertMode::Paste,
+                stt_provider: "local".into(),
+                stt_model: "/definitely/does/not/exist.bin".into(),
+                language: "en".into(),
+                llm_base_url: "https://example.com/v1".into(),
+                llm_model: "gpt-4o-mini".into(),
+                microphone_device: None,
+                microphone_device_id: None,
+                history_enabled: true,
+                context: voicewin_core::context::ContextToggles::default(),
+            },
+            profiles: vec![],
+            prompts: vec![],
+            llm_api_key_present: false,
+        };
+
+        let response = svc
+            .run_session_with_hook_using_config(
+                cfg,
+                RunSessionRequest {
+                    transcript: "runtime smoke transcript".into(),
+                    warning: None,
+                },
+                AudioInput {
+                    sample_rate_hz: 16_000,
+                    samples: vec![],
+                },
+                |_stage| async {},
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.stage, "done");
+        assert_eq!(response.final_text.as_deref(), Some("runtime smoke transcript"));
+
+        let inserted = inserter.inserted.lock().unwrap();
+        assert_eq!(inserted.len(), 1);
+        assert_eq!(inserted[0], ("runtime smoke transcript".into(), InsertMode::Paste));
     }
 }
