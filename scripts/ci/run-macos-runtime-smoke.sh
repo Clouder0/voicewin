@@ -80,38 +80,6 @@ refocus_textedit_until_exit() {
   done
 }
 
-save_textedit_target() {
-  local deadline=$((SECONDS + 10))
-
-  while (( SECONDS < deadline )); do
-    if osascript >/dev/null 2>&1 <<APPLE
-with timeout of 2 seconds
-  tell application "TextEdit"
-    activate
-    repeat with docRef in documents
-      try
-        if POSIX path of (path of docRef) is "$TARGET_FILE" then
-          save docRef
-          return
-        end if
-      end try
-    end repeat
-
-    error "TextEdit target document not found"
-  end tell
-end timeout
-APPLE
-    then
-      return
-    fi
-
-    sleep 0.5
-  done
-
-  echo "ERROR: TextEdit target document not found." >&2
-  exit 1
-}
-
 trap cleanup EXIT
 
 mkdir -p "$SMOKE_DIR"
@@ -237,8 +205,9 @@ if (( start_line >= success_line )); then
   exit 1
 fi
 
-save_textedit_target
-actual_text="$(python3 - "$TARGET_FILE" <<'PY'
+actual_text=""
+for _ in {1..20}; do
+  actual_text="$(python3 - "$TARGET_FILE" <<'PY'
 from pathlib import Path
 import sys
 
@@ -246,6 +215,13 @@ path = Path(sys.argv[1])
 print(path.read_text(encoding='utf-8'), end='')
 PY
 )"
+
+  if [[ "$actual_text" == "$TRANSCRIPT" ]]; then
+    break
+  fi
+
+  sleep 0.5
+done
 
 if [[ "$actual_text" != "$TRANSCRIPT" ]]; then
   echo "ERROR: TextEdit document contents mismatch. Expected '$TRANSCRIPT' but found '$actual_text'." >&2
