@@ -84,7 +84,7 @@ jobs:
 
       - name: Build Tauri app (unsigned macOS bundle)
         working-directory: voicewin-tauri
-        run: cargo tauri build --target aarch64-apple-darwin
+        run: cargo tauri build --target aarch64-apple-darwin --bundles app,dmg
 
       - name: Verify build output is arm64
         shell: bash
