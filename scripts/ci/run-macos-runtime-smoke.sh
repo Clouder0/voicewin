@@ -17,55 +17,78 @@ DEFAULT_APP_CANDIDATES=(
 
 cleanup() {
   osascript >/dev/null 2>&1 <<APPLE || true
-tell application "TextEdit"
-  if not running then
-    return
-  end if
+with timeout of 10 seconds
+  tell application "TextEdit"
+    if not running then
+      return
+    end if
 
-  repeat with docRef in documents
-    try
-      if POSIX path of (path of docRef) is "$TARGET_FILE" then
-        try
-          save docRef
-        end try
-        close docRef saving yes
-        exit repeat
-      end if
-    end try
-  end repeat
-end tell
+    repeat with docRef in documents
+      try
+        if POSIX path of (path of docRef) is "$TARGET_FILE" then
+          try
+            save docRef
+          end try
+          close docRef saving yes
+          exit repeat
+        end if
+      end try
+    end repeat
+  end tell
+end timeout
 APPLE
 }
 
 prepare_textedit_target() {
-  osascript <<APPLE >/dev/null
-tell application "TextEdit"
-  activate
-  open POSIX file "$TARGET_FILE"
-  set deadline to (current date) + 10
+  local deadline=$((SECONDS + 30))
 
-  repeat while (current date) < deadline
-    if (count of documents) > 0 then
-      set docRef to front document
-      try
-        if POSIX path of (path of docRef) is "$TARGET_FILE" then
-          set text of docRef to ""
-          save docRef
-          return
-        end if
-      end try
+  open -a "TextEdit" "$TARGET_FILE"
+
+  while (( SECONDS < deadline )); do
+    if osascript >/dev/null 2>&1 <<APPLE
+with timeout of 2 seconds
+  tell application "TextEdit"
+    if not running then
+      error "TextEdit not running yet"
     end if
 
-    delay 0.1
-  end repeat
+    activate
 
-  error "timed out waiting for TextEdit target document"
-end tell
+    if (count of documents) = 0 then
+      error "TextEdit has no documents yet"
+    end if
+
+    set docRef to front document
+    try
+      if POSIX path of (path of docRef) is "$TARGET_FILE" then
+        set text of docRef to ""
+        save docRef
+        return
+      end if
+    end try
+
+    error "TextEdit target document not ready yet"
+  end tell
+end timeout
 APPLE
+    then
+      return
+    fi
+
+    sleep 0.5
+  done
+
+  echo "ERROR: timed out waiting for TextEdit target document." >&2
+  exit 1
 }
 
 focus_textedit() {
-  osascript -e 'tell application "TextEdit" to activate' >/dev/null
+  open -a "TextEdit" "$TARGET_FILE" >/dev/null 2>&1 || true
+  osascript >/dev/null 2>&1 <<'APPLE' || true
+with timeout of 5 seconds
+  tell application "TextEdit" to activate
+end timeout
+APPLE
 }
 
 refocus_textedit_until_exit() {
@@ -83,21 +106,35 @@ refocus_textedit_until_exit() {
 }
 
 save_textedit_target() {
-  osascript <<APPLE >/dev/null
-tell application "TextEdit"
-  activate
-  repeat with docRef in documents
-    try
-      if POSIX path of (path of docRef) is "$TARGET_FILE" then
-        save docRef
-        return
-      end if
-    end try
-  end repeat
+  local deadline=$((SECONDS + 10))
 
-  error "TextEdit target document not found"
-end tell
+  while (( SECONDS < deadline )); do
+    if osascript >/dev/null 2>&1 <<APPLE
+with timeout of 2 seconds
+  tell application "TextEdit"
+    activate
+    repeat with docRef in documents
+      try
+        if POSIX path of (path of docRef) is "$TARGET_FILE" then
+          save docRef
+          return
+        end if
+      end try
+    end repeat
+
+    error "TextEdit target document not found"
+  end tell
+end timeout
 APPLE
+    then
+      return
+    fi
+
+    sleep 0.5
+  done
+
+  echo "ERROR: TextEdit target document not found." >&2
+  exit 1
 }
 
 trap cleanup EXIT
