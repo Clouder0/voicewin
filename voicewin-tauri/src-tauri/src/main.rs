@@ -116,7 +116,7 @@ const DEFAULT_TOGGLE_HOTKEY: &str = "Ctrl+Space";
 const DEFAULT_TOGGLE_HOTKEY: &str = "Alt+Z";
 
 pub const EVENT_SESSION_STATUS: &str = "voicewin://session_status";
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", test))]
 pub const EVENT_MIC_LEVEL: &str = "voicewin://mic_level";
 pub const EVENT_TOGGLE_HOTKEY_CHANGED: &str = "voicewin://toggle_hotkey_changed";
 

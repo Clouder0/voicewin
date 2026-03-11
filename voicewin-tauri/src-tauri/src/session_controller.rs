@@ -74,7 +74,7 @@ pub struct SessionStatusPayload {
     pub last_text_available: bool,
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", test))]
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MicLevelPayload {
     pub rms: f32,
@@ -314,8 +314,13 @@ impl SessionController {
         }
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
-    pub async fn emit_mic_level(&self, app: &tauri::AppHandle, rms: f32, peak: f32) {
+    #[cfg(any(windows, target_os = "macos", test))]
+    pub async fn emit_mic_level<R: tauri::Runtime + 'static>(
+        &self,
+        app: &tauri::AppHandle<R>,
+        rms: f32,
+        peak: f32,
+    ) {
         let payload = MicLevelPayload {
             rms: rms.clamp(0.0, 1.0),
             peak: peak.clamp(0.0, 1.0),
@@ -2129,6 +2134,14 @@ mod tests {
         let tail = c.flush().unwrap();
         assert_eq!(tail, vec![7.0]);
         assert!(c.flush().is_none());
+    }
+
+    #[allow(dead_code)]
+    fn assert_emit_mic_level_accepts_generic_app_handle<R: tauri::Runtime + 'static>(
+        controller: &SessionController,
+        app: &tauri::AppHandle<R>,
+    ) {
+        let _future = controller.emit_mic_level(app, 0.25, 0.5);
     }
 
     #[test]
