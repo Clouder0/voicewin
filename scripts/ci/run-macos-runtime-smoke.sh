@@ -40,38 +40,13 @@ APPLE
 }
 
 prepare_textedit_target() {
-  local deadline=$((SECONDS + 30))
+  local deadline=$((SECONDS + 15))
 
   open -a "TextEdit" "$TARGET_FILE"
 
   while (( SECONDS < deadline )); do
-    if osascript >/dev/null 2>&1 <<APPLE
-with timeout of 2 seconds
-  tell application "TextEdit"
-    if not running then
-      error "TextEdit not running yet"
-    end if
-
-    activate
-
-    if (count of documents) = 0 then
-      error "TextEdit has no documents yet"
-    end if
-
-    set docRef to front document
-    try
-      if POSIX path of (path of docRef) is "$TARGET_FILE" then
-        set text of docRef to ""
-        save docRef
-        return
-      end if
-    end try
-
-    error "TextEdit target document not ready yet"
-  end tell
-end timeout
-APPLE
-    then
+    if pgrep -x "TextEdit" >/dev/null 2>&1; then
+      focus_textedit
       return
     fi
 
