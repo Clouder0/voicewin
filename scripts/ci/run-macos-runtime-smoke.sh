@@ -206,7 +206,7 @@ if (( start_line >= success_line )); then
 fi
 
 actual_text=""
-for _ in {1..20}; do
+for _ in {1..60}; do
   actual_text="$(python3 - "$TARGET_FILE" <<'PY'
 from pathlib import Path
 import sys
