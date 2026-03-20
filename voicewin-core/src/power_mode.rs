@@ -35,8 +35,12 @@ pub struct PowerModeOverrides {
     pub stt_provider: Option<String>,
     pub stt_model: Option<String>,
     pub language: Option<String>,
+    pub llm_provider_kind: Option<String>,
     pub llm_base_url: Option<String>,
     pub llm_model: Option<String>,
+    pub llm_api_kind: Option<String>,
+    pub llm_preflight_mode: Option<String>,
+    pub llm_reasoning_effort: Option<String>,
 
     // Context toggles (best-effort on Windows)
     pub context: Option<crate::context::ContextToggles>,
@@ -70,8 +74,20 @@ pub struct GlobalDefaults {
     pub stt_provider: String,
     pub stt_model: String,
     pub language: String,
+    #[serde(default = "default_llm_provider_kind")]
+    pub llm_provider_kind: String,
     pub llm_base_url: String,
     pub llm_model: String,
+    #[serde(default = "default_llm_api_kind")]
+    pub llm_api_kind: String,
+    #[serde(default = "default_llm_preflight_mode")]
+    pub llm_preflight_mode: String,
+    #[serde(default = "default_llm_preflight_delay_ms")]
+    pub llm_preflight_delay_ms: u64,
+    #[serde(default = "default_screenshot_max_edge_px")]
+    pub screenshot_max_edge_px: u32,
+    #[serde(default)]
+    pub llm_reasoning_effort: Option<String>,
 
     /// Optional preferred microphone device name.
     ///
@@ -98,6 +114,26 @@ fn default_history_enabled() -> bool {
     true
 }
 
+fn default_llm_provider_kind() -> String {
+    "openai_compatible".into()
+}
+
+fn default_llm_api_kind() -> String {
+    "chat_completions".into()
+}
+
+fn default_llm_preflight_mode() -> String {
+    "off".into()
+}
+
+fn default_llm_preflight_delay_ms() -> u64 {
+    1_500
+}
+
+fn default_screenshot_max_edge_px() -> u32 {
+    1_280
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EffectiveConfig {
     pub enable_enhancement: bool,
@@ -106,8 +142,20 @@ pub struct EffectiveConfig {
     pub stt_provider: String,
     pub stt_model: String,
     pub language: String,
+    #[serde(default = "default_llm_provider_kind")]
+    pub llm_provider_kind: String,
     pub llm_base_url: String,
     pub llm_model: String,
+    #[serde(default = "default_llm_api_kind")]
+    pub llm_api_kind: String,
+    #[serde(default = "default_llm_preflight_mode")]
+    pub llm_preflight_mode: String,
+    #[serde(default = "default_llm_preflight_delay_ms")]
+    pub llm_preflight_delay_ms: u64,
+    #[serde(default = "default_screenshot_max_edge_px")]
+    pub screenshot_max_edge_px: u32,
+    #[serde(default)]
+    pub llm_reasoning_effort: Option<String>,
 
     pub context: crate::context::ContextToggles,
 
@@ -149,8 +197,14 @@ pub fn resolve_effective_config(
         stt_provider: defaults.stt_provider.clone(),
         stt_model: defaults.stt_model.clone(),
         language: defaults.language.clone(),
+        llm_provider_kind: defaults.llm_provider_kind.clone(),
         llm_base_url: defaults.llm_base_url.clone(),
         llm_model: defaults.llm_model.clone(),
+        llm_api_kind: defaults.llm_api_kind.clone(),
+        llm_preflight_mode: defaults.llm_preflight_mode.clone(),
+        llm_preflight_delay_ms: defaults.llm_preflight_delay_ms,
+        screenshot_max_edge_px: defaults.screenshot_max_edge_px,
+        llm_reasoning_effort: defaults.llm_reasoning_effort.clone(),
         context: defaults.context.clone(),
         matched_profile_id: matched_profile.map(|p| p.id.clone()),
         matched_profile_name: matched_profile.map(|p| p.name.clone()),
@@ -192,11 +246,23 @@ fn apply_overrides(cfg: &mut EffectiveConfig, overrides: &PowerModeOverrides) {
     if let Some(v) = &overrides.language {
         cfg.language = v.clone();
     }
+    if let Some(v) = &overrides.llm_provider_kind {
+        cfg.llm_provider_kind = v.clone();
+    }
     if let Some(v) = &overrides.llm_base_url {
         cfg.llm_base_url = v.clone();
     }
     if let Some(v) = &overrides.llm_model {
         cfg.llm_model = v.clone();
+    }
+    if let Some(v) = &overrides.llm_api_kind {
+        cfg.llm_api_kind = v.clone();
+    }
+    if let Some(v) = &overrides.llm_preflight_mode {
+        cfg.llm_preflight_mode = v.clone();
+    }
+    if let Some(v) = &overrides.llm_reasoning_effort {
+        cfg.llm_reasoning_effort = Some(v.clone());
     }
     if let Some(v) = &overrides.context {
         cfg.context = v.clone();
@@ -235,8 +301,14 @@ mod tests {
             stt_provider: "local".into(),
             stt_model: "whisper".into(),
             language: "en".into(),
+            llm_provider_kind: default_llm_provider_kind(),
             llm_base_url: "http://localhost".into(),
             llm_model: "gpt-4o-mini".into(),
+            llm_api_kind: default_llm_api_kind(),
+            llm_preflight_mode: default_llm_preflight_mode(),
+            llm_preflight_delay_ms: default_llm_preflight_delay_ms(),
+            screenshot_max_edge_px: default_screenshot_max_edge_px(),
+            llm_reasoning_effort: None,
             microphone_device: None,
             microphone_device_id: None,
             history_enabled: true,
@@ -279,5 +351,46 @@ mod tests {
         );
 
         assert_eq!(cfg.enable_enhancement, false);
+    }
+
+    #[test]
+    fn resolve_applies_llm_preflight_mode_override() {
+        let defaults = GlobalDefaults {
+            enable_enhancement: false,
+            prompt_id: None,
+            insert_mode: crate::types::InsertMode::Paste,
+            stt_provider: "local".into(),
+            stt_model: "whisper".into(),
+            language: "en".into(),
+            llm_provider_kind: default_llm_provider_kind(),
+            llm_base_url: "http://localhost".into(),
+            llm_model: "gpt-4o-mini".into(),
+            llm_api_kind: default_llm_api_kind(),
+            llm_preflight_mode: default_llm_preflight_mode(),
+            llm_preflight_delay_ms: default_llm_preflight_delay_ms(),
+            screenshot_max_edge_px: default_screenshot_max_edge_px(),
+            llm_reasoning_effort: None,
+            microphone_device: None,
+            microphone_device_id: None,
+            history_enabled: true,
+            context: crate::context::ContextToggles::default(),
+        };
+
+        let profile = PowerModeProfile {
+            id: ProfileId::new(),
+            name: "Slack".into(),
+            enabled: true,
+            matchers: vec![AppMatcher::ProcessNameEquals("slack.exe".into())],
+            overrides: PowerModeOverrides {
+                llm_preflight_mode: Some("off".into()),
+                ..Default::default()
+            },
+        };
+
+        let app = AppIdentity::new().with_process_name("slack.exe");
+        let cfg =
+            resolve_effective_config(&defaults, &[profile], &app, &EphemeralOverrides::default());
+
+        assert_eq!(cfg.llm_preflight_mode, "off");
     }
 }

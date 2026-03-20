@@ -15,11 +15,11 @@ use std::{
     any::Any,
     ffi::c_void,
     mem::MaybeUninit,
-    panic::{catch_unwind, resume_unwind, AssertUnwindSafe},
+    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
 };
 
 use core_foundation::array::CFArray;
-use core_foundation::base::TCFType;
+use core_foundation::base::{CFRelease, CFTypeRef, TCFType};
 use core_foundation::dictionary::CFDictionary;
 use core_foundation::string::{CFString, CFStringRef};
 use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
@@ -39,6 +39,7 @@ struct __TISInputSource {
     _private: [u8; 0],
 }
 type TISInputSourceRef = *const __TISInputSource;
+type AXUIElementRef = *const c_void;
 
 #[repr(C)]
 struct __DispatchObject {
@@ -48,7 +49,15 @@ struct __DispatchObject {
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
     fn AXIsProcessTrustedWithOptions(options: *const AnyObject) -> bool;
+    fn AXUIElementCreateSystemWide() -> AXUIElementRef;
+    fn AXUIElementCopyAttributeValue(
+        element: AXUIElementRef,
+        attribute: CFStringRef,
+        value: *mut CFTypeRef,
+    ) -> i32;
     static kAXTrustedCheckOptionPrompt: *const AnyObject;
+    static kAXFocusedUIElementAttribute: CFStringRef;
+    static kAXSelectedTextAttribute: CFStringRef;
 }
 
 #[link(name = "Carbon", kind = "framework")]
@@ -177,6 +186,66 @@ pub(super) fn prompt_accessibility_permission() -> bool {
         let options = CFDictionary::from_CFType_pairs(&[(key, value)]);
         AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef().cast())
     }
+}
+
+pub(super) fn read_clipboard_text() -> Option<String> {
+    run_on_main_queue_sync(|| {
+        debug_assert_main_thread("read_clipboard_text");
+
+        let pasteboard = NSPasteboard::generalPasteboard();
+        let text_type: &NSPasteboardType = unsafe { NSPasteboardTypeString };
+        pasteboard
+            .stringForType(text_type)
+            .map(|value| value.to_string())
+            .filter(|value| !value.trim().is_empty())
+    })
+}
+
+pub(super) fn read_selected_text() -> Option<String> {
+    if !is_accessibility_trusted() {
+        return None;
+    }
+
+    run_on_main_queue_sync(|| {
+        debug_assert_main_thread("read_selected_text");
+        read_selected_text_impl()
+    })
+}
+
+fn read_selected_text_impl() -> Option<String> {
+    debug_assert_main_thread("read_selected_text_impl");
+
+    let system = unsafe { AXUIElementCreateSystemWide() };
+    if system.is_null() {
+        return None;
+    }
+
+    let mut focused_value: CFTypeRef = std::ptr::null();
+    let focused_status = unsafe {
+        AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute, &mut focused_value)
+    };
+    unsafe {
+        CFRelease(system.cast());
+    }
+    if focused_status != 0 || focused_value.is_null() {
+        return None;
+    }
+
+    let focused = focused_value.cast::<c_void>();
+    let mut selected_value: CFTypeRef = std::ptr::null();
+    let selected_status = unsafe {
+        AXUIElementCopyAttributeValue(focused, kAXSelectedTextAttribute, &mut selected_value)
+    };
+    unsafe {
+        CFRelease(focused_value);
+    }
+    if selected_status != 0 || selected_value.is_null() {
+        return None;
+    }
+
+    let selected = unsafe { CFString::wrap_under_create_rule(selected_value.cast()) };
+    let text = selected.to_string();
+    (!text.trim().is_empty()).then_some(text)
 }
 
 fn input_source_id(source: TISInputSourceRef) -> Option<String> {
@@ -582,8 +651,8 @@ pub fn paste_text_via_clipboard(text: &str, mode: InsertMode) -> anyhow::Result<
 #[cfg(test)]
 mod tests {
     use super::{
-        is_us_qwerty_input_source_id, run_on_main_queue_sync, should_restore_pasteboard,
-        PasteboardWriteState,
+        PasteboardWriteState, is_us_qwerty_input_source_id, run_on_main_queue_sync,
+        should_restore_pasteboard,
     };
 
     unsafe extern "C" {

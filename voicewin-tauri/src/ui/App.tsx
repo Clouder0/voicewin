@@ -3,9 +3,10 @@ import { HistoryPage } from './HistoryPage';
 import { ModelsPage } from './ModelsPage';
 import { OverviewPage } from './OverviewPage';
 import { ProfilesPage } from './ProfilesPage';
+import { PromptsPage } from './PromptsPage';
 import { SettingsPage } from './SettingsPage';
 
-type Page = 'overview' | 'profiles' | 'models' | 'history' | 'settings';
+type Page = 'overview' | 'profiles' | 'prompts' | 'models' | 'history' | 'settings';
 
 function NavIcon({ children }: { children: React.ReactNode }) {
   return (
@@ -31,6 +32,15 @@ function ProfilesIcon() {
       <rect x="13" y="4" width="7" height="7" rx="1.2" fill="none" stroke="currentColor" strokeWidth="2" />
       <rect x="4" y="13" width="7" height="7" rx="1.2" fill="none" stroke="currentColor" strokeWidth="2" />
       <rect x="13" y="13" width="7" height="7" rx="1.2" fill="currentColor" />
+    </NavIcon>
+  );
+}
+
+function PromptsIcon() {
+  return (
+    <NavIcon>
+      <path d="M6 7h12M6 12h12M6 17h8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <circle cx="16.5" cy="17" r="1.5" fill="currentColor" />
     </NavIcon>
   );
 }
@@ -85,7 +95,7 @@ export function App() {
           const { listen } = await import('@tauri-apps/api/event');
           const nextUnlisten = await listen<Page>('voicewin://navigate', (e) => {
             const dest = e.payload;
-            if (dest === 'overview' || dest === 'profiles' || dest === 'models' || dest === 'history' || dest === 'settings') {
+            if (dest === 'overview' || dest === 'profiles' || dest === 'prompts' || dest === 'models' || dest === 'history' || dest === 'settings') {
               setPage(dest);
             }
           });
@@ -121,6 +131,12 @@ export function App() {
         return (
           <PageContainer>
             <ProfilesPage />
+          </PageContainer>
+        );
+      case 'prompts':
+        return (
+          <PageContainer>
+            <PromptsPage />
           </PageContainer>
         );
       case 'models':
@@ -168,6 +184,17 @@ export function App() {
           title="Profiles"
         >
           <ProfilesIcon />
+        </button>
+        <button
+          type="button"
+          className="vw-navItem"
+          data-active={page === 'prompts'}
+          aria-current={page === 'prompts' ? 'page' : undefined}
+          onClick={() => setPage('prompts')}
+          aria-label="Prompts"
+          title="Prompts"
+        >
+          <PromptsIcon />
         </button>
         <button
           type="button"

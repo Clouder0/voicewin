@@ -11,6 +11,11 @@ async fn main() -> anyhow::Result<()> {
     // This compiles on Linux; actual GUI + Windows platform code will be implemented under cfg(windows).
 
     let llm_api_key = std::env::var("LLM_API_KEY").unwrap_or_default();
+    let llm_api_kind = std::env::var("LLM_API_KIND").unwrap_or_else(|_| "responses_sse".into());
+    let llm_reasoning_effort = std::env::var("LLM_REASONING_EFFORT")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
 
     let defaults = GlobalDefaults {
         enable_enhancement: !llm_api_key.trim().is_empty(),
@@ -19,9 +24,15 @@ async fn main() -> anyhow::Result<()> {
         stt_provider: "local".into(),
         stt_model: "mock".into(),
         language: "en".into(),
+        llm_provider_kind: "openai_compatible".into(),
         llm_base_url: std::env::var("LLM_BASE_URL")
             .unwrap_or_else(|_| "http://localhost:11434/v1".into()),
-        llm_model: std::env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into()),
+        llm_model: std::env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-5.4".into()),
+        llm_api_kind,
+        llm_preflight_mode: "off".into(),
+        llm_preflight_delay_ms: 1_500,
+        screenshot_max_edge_px: 1_280,
+        llm_reasoning_effort,
         microphone_device: None,
         microphone_device_id: None,
         history_enabled: true,
@@ -59,9 +70,9 @@ async fn main() -> anyhow::Result<()> {
     let stt = Arc::new(voicewin_runtime::stt::MockSttProvider {
         text: "rewrite hello rewrite".into(),
     });
-    let llm = Arc::new(voicewin_runtime::llm::OpenAiCompatibleLlmProvider::new(
-        llm_api_key.clone(),
-    ));
+    let llm = Arc::new(
+        voicewin_runtime::llm::OpenAiCompatibleLlmProvider::new().expect("build llm http client"),
+    );
     let inserter = Arc::new(voicewin_platform::test::StdoutInserter);
 
     let engine = VoicewinEngine::new(
@@ -69,7 +80,8 @@ async fn main() -> anyhow::Result<()> {
             defaults,
             profiles,
             prompts,
-            llm_api_key,
+            openai_api_key: llm_api_key,
+            gemini_api_key: String::new(),
         },
         ctx_provider,
         stt,

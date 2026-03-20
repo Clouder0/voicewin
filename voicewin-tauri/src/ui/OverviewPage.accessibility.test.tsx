@@ -37,6 +37,18 @@ describe('OverviewPage macOS Accessibility permission', () => {
     };
 
     invokeMock.mockImplementation(async (command: string, args?: unknown) => {
+      if (command === 'get_platform_capabilities') {
+        return {
+          platform: 'macos',
+          foreground_app_identity: true,
+          clipboard_context: true,
+          selected_text_context: true,
+          window_context: true,
+          screenshot_capture: true,
+          foreground_window_capture: false,
+          auto_insert: true,
+        };
+      }
       if (command === 'get_toggle_hotkey') {
         return { hotkey: 'Alt+Z', error: null };
       }

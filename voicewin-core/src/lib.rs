@@ -1,6 +1,7 @@
 pub mod config;
 pub mod context;
 pub mod enhancement;
+pub mod llm;
 pub mod power_mode;
 pub mod stt;
 pub mod text;
@@ -10,6 +11,7 @@ pub mod types;
 pub use config::*;
 pub use context::*;
 pub use enhancement::*;
+pub use llm::*;
 pub use power_mode::*;
 pub use stt::*;
 pub use text::*;

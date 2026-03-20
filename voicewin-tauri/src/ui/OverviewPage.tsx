@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 
+import type { PlatformCapabilities } from '../lib/types';
 import { keydownToHotkey } from './hotkey';
+import { fallbackPlatformCapabilities, loadPlatformCapabilities } from './platformCapabilities';
 
 type HotkeyState = {
   hotkey: string;
@@ -88,10 +90,11 @@ function MicHero({ onClick }: { onClick: () => void }) {
 }
 
 export function OverviewPage() {
-  const initialIsMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent);
+  const initialPlatformCapabilities = fallbackPlatformCapabilities();
+  const initialIsMac = initialPlatformCapabilities.platform === 'macos';
   const initialHotkey = initialIsMac ? 'Alt+Z' : 'Ctrl+Space';
 
-  const [isMac, setIsMac] = useState<boolean>(initialIsMac);
+  const [platformCapabilities, setPlatformCapabilities] = useState<PlatformCapabilities>(initialPlatformCapabilities);
 
   const [toggleHotkey, setToggleHotkey] = useState<string>(initialHotkey);
   const [hotkeyEditorOpen, setHotkeyEditorOpen] = useState(false);
@@ -109,44 +112,38 @@ export function OverviewPage() {
   const [accessibilityTrusted, setAccessibilityTrusted] = useState<boolean | null>(null);
 
   const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
+  const isMac = platformCapabilities.platform === 'macos';
+  const isLinux = platformCapabilities.platform === 'linux';
 
   useEffect(() => {
+    let disposed = false;
     let unlisten: null | (() => void) = null;
-
-    const refreshAccessibilityTrusted = async () => {
-      // Only relevant on macOS.
-      if (!(typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent))) return;
-
-      try {
-        const { isTauri, invoke } = await import('@tauri-apps/api/core');
-        if (!isTauri()) return;
-
-        const status = await invoke<MacosPermissionsStatus>('get_macos_permissions_status');
-        if (typeof status?.accessibility_trusted === 'boolean') {
-          setAccessibilityTrusted(status.accessibility_trusted);
-        }
-      } catch {
-        // Best-effort: older builds may not expose this command.
-      }
-    };
 
     async function start() {
       try {
         const { isTauri, invoke } = await import('@tauri-apps/api/core');
         if (!isTauri()) return;
 
-        // Platform (used for display names like Option/Cmd).
-        // Tauri v2's JS API no longer exposes `@tauri-apps/api/os`, so we use a
-        // simple UA sniff (good enough for modifier label display).
-        setIsMac(typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent));
+        const nextPlatformCapabilities = await loadPlatformCapabilities(invoke);
+        if (!disposed) {
+          setPlatformCapabilities(nextPlatformCapabilities);
+        }
 
-        // macOS permissions
-        await refreshAccessibilityTrusted();
+        if (nextPlatformCapabilities.platform === 'macos') {
+          try {
+            const status = await invoke<MacosPermissionsStatus>('get_macos_permissions_status');
+            if (!disposed && typeof status?.accessibility_trusted === 'boolean') {
+              setAccessibilityTrusted(status.accessibility_trusted);
+            }
+          } catch {
+            // Best-effort: older builds may not expose this command.
+          }
+        }
 
         // Hotkey
         try {
           const res = await invoke<HotkeyState>('get_toggle_hotkey');
-          if (res?.hotkey) {
+          if (!disposed && res?.hotkey) {
             setToggleHotkey(res.hotkey);
             setHotkeyDraft(res.hotkey);
           }
@@ -169,7 +166,9 @@ export function OverviewPage() {
         // Model status
         try {
           const ms = await invoke<ModelStatus>('get_model_status');
-          setModelStatus(ms);
+          if (!disposed) {
+            setModelStatus(ms);
+          }
         } catch {
           // ignore
         }
@@ -180,8 +179,10 @@ export function OverviewPage() {
           }>('get_config');
           const nextName = cfg.defaults.microphone_device?.trim() ?? '';
           const nextId = cfg.defaults.microphone_device_id?.trim() ?? '';
-          setSelectedMicName(nextName.length > 0 ? nextName : null);
-          setSelectedMicId(nextId.length > 0 ? nextId : null);
+          if (!disposed) {
+            setSelectedMicName(nextName.length > 0 ? nextName : null);
+            setSelectedMicId(nextId.length > 0 ? nextId : null);
+          }
         } catch {
           // ignore
         }
@@ -191,6 +192,34 @@ export function OverviewPage() {
     }
 
     void start();
+
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isMac) {
+      setAccessibilityTrusted(null);
+      return;
+    }
+
+    let disposed = false;
+
+    const refreshAccessibilityTrusted = async () => {
+      try {
+        const { isTauri, invoke } = await import('@tauri-apps/api/core');
+        if (!isTauri()) return;
+
+        const status = await invoke<MacosPermissionsStatus>('get_macos_permissions_status');
+        if (!disposed && typeof status?.accessibility_trusted === 'boolean') {
+          setAccessibilityTrusted(status.accessibility_trusted);
+        }
+      } catch {
+        // Best-effort: older builds may not expose this command.
+      }
+    };
 
     const onFocus = () => {
       void refreshAccessibilityTrusted();
@@ -202,15 +231,17 @@ export function OverviewPage() {
       }
     };
 
+    void refreshAccessibilityTrusted();
+
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisibility);
 
     return () => {
-      if (unlisten) unlisten();
+      disposed = true;
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, []);
+  }, [isMac]);
 
   useEffect(() => {
     if (!hotkeyEditorOpen) return;
@@ -255,6 +286,25 @@ export function OverviewPage() {
     if (modelStatus.preferred_ok || modelStatus.bootstrap_ok) return 'var(--color-success-fg)';
     return 'var(--color-danger-fg)';
   }, [modelStatus]);
+
+  const insertTitle = useMemo(() => {
+    if (isMac && accessibilityTrusted === false) return 'Clipboard Only';
+    return platformCapabilities.auto_insert ? 'Auto Insert' : 'Clipboard Only';
+  }, [accessibilityTrusted, isMac, platformCapabilities.auto_insert]);
+
+  const insertSubtitle = useMemo(() => {
+    if (isMac) {
+      if (accessibilityTrusted == null) return 'Checking access';
+      return accessibilityTrusted ? 'Ready' : 'Enable Accessibility';
+    }
+    return platformCapabilities.auto_insert ? 'Ready' : 'Manual paste';
+  }, [accessibilityTrusted, isMac, platformCapabilities.auto_insert]);
+
+  const insertSubtitleColor = useMemo(() => {
+    if (!isMac) return undefined;
+    if (accessibilityTrusted == null) return undefined;
+    return accessibilityTrusted ? 'var(--color-success-fg)' : 'var(--color-danger-fg)';
+  }, [accessibilityTrusted, isMac]);
 
   return (
     <div style={{ maxWidth: 600, margin: '0 auto', paddingTop: 64 }}>
@@ -379,6 +429,18 @@ export function OverviewPage() {
               </div>
             </>
           ) : null}
+        </div>
+      ) : null}
+
+      {isLinux ? (
+        <div className="vw-card" style={{ marginTop: 'var(--space-12)', padding: 'var(--space-12)' }}>
+          <div className="vw-type-bodyStrong">Linux Clipboard Insert</div>
+          <div className="vw-type-caption" style={{ marginTop: 'var(--space-8)' }}>
+            VoiceWin currently copies the final transcript to the clipboard on Linux. Press Ctrl+V to paste.
+          </div>
+          <div className="vw-type-caption" style={{ marginTop: 'var(--space-8)' }}>
+            Automatic profile matching, selected-text capture, window context capture, and visual context capture are not available on Linux yet.
+          </div>
         </div>
       ) : null}
 
@@ -537,7 +599,7 @@ export function OverviewPage() {
       >
         <StatusCard icon="💾" title={modelTitle} subtitle={modelSubtitle} subtitleColor={modelSubtitleColor} />
         <StatusCard icon="☁" title={providerTitle} />
-        <StatusCard icon="🪟" title="Default" />
+        <StatusCard icon="⌨" title={insertTitle} subtitle={insertSubtitle} subtitleColor={insertSubtitleColor} />
       </div>
 
       <div className="vw-type-caption" style={{ marginTop: 'var(--space-12)' }}>

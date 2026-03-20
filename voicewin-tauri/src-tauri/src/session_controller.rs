@@ -1,9 +1,9 @@
+#[cfg(any(windows, target_os = "macos"))]
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool as GateAtomicBool, Ordering as GateOrdering};
 use std::sync::Arc;
 #[cfg(any(windows, target_os = "macos"))]
 use std::sync::Mutex as StdMutex;
-use std::sync::atomic::{AtomicBool as GateAtomicBool, Ordering as GateOrdering};
-#[cfg(any(windows, target_os = "macos"))]
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use tauri::{Emitter, Manager};
@@ -12,11 +12,11 @@ use tokio::sync::Mutex;
 use voicewin_appcore::service::AppService;
 
 #[cfg(any(windows, target_os = "macos"))]
-use voicewin_runtime::secrets::{SecretKey, get_secret};
+use voicewin_runtime::secrets::{get_secret, SecretKey};
 
 #[cfg(any(windows, target_os = "macos"))]
 use voicewin_providers::elevenlabs_realtime::{
-    ElevenLabsRealtimeConfig, ElevenLabsRealtimeHandle, RealtimeEvent, spawn_realtime_session,
+    spawn_realtime_session, ElevenLabsRealtimeConfig, ElevenLabsRealtimeHandle, RealtimeEvent,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -134,6 +134,11 @@ struct Inner {
     // When we stop recording we run the session pipeline (transcribe/enhance/insert)
     // in a background task so the UI stays responsive and we can cancel it.
     processing_task: Option<tauri::async_runtime::JoinHandle<()>>,
+    prepared_session_task: Option<
+        tauri::async_runtime::JoinHandle<
+            Result<voicewin_appcore::service::PreparedSessionContext, String>,
+        >,
+    >,
 
     #[cfg(any(windows, target_os = "macos"))]
     realtime_stt: Option<RealtimeSttState>,
@@ -188,7 +193,9 @@ impl SessionController {
 
     #[cfg(test)]
     fn arm_transition_pause(&self) {
-        self.transition_pause.armed.store(true, GateOrdering::Release);
+        self.transition_pause
+            .armed
+            .store(true, GateOrdering::Release);
     }
 
     #[cfg(test)]
@@ -203,7 +210,11 @@ impl SessionController {
 
     #[cfg(test)]
     async fn maybe_pause_after_transition_acquired(&self) {
-        if self.transition_pause.armed.swap(false, GateOrdering::AcqRel) {
+        if self
+            .transition_pause
+            .armed
+            .swap(false, GateOrdering::AcqRel)
+        {
             self.transition_pause.entered.notify_one();
             self.transition_pause.release.notified().await;
         }
@@ -252,10 +263,7 @@ impl SessionController {
         }
     }
 
-    pub async fn mark_overlay_ready<R: tauri::Runtime + 'static>(
-        &self,
-        app: &tauri::AppHandle<R>,
-    ) {
+    pub async fn mark_overlay_ready<R: tauri::Runtime + 'static>(&self, app: &tauri::AppHandle<R>) {
         {
             let mut inner = self.inner.lock().await;
             if !inner.overlay_ready {
@@ -268,10 +276,7 @@ impl SessionController {
         self.emit_status(app).await;
     }
 
-    pub async fn emit_status<R: tauri::Runtime + 'static>(
-        &self,
-        app: &tauri::AppHandle<R>,
-    ) {
+    pub async fn emit_status<R: tauri::Runtime + 'static>(&self, app: &tauri::AppHandle<R>) {
         let payload = {
             let mut inner = self.inner.lock().await;
             Self::prune_status_message(&mut inner);
@@ -361,10 +366,7 @@ impl SessionController {
         }
     }
 
-    async fn show_overlay_and_sync<R: tauri::Runtime + 'static>(
-        &self,
-        app: &tauri::AppHandle<R>,
-    ) {
+    async fn show_overlay_and_sync<R: tauri::Runtime + 'static>(&self, app: &tauri::AppHandle<R>) {
         // On some platforms a hidden webview may miss events; showing first and
         // then emitting status makes the overlay self-healing.
         Self::show_overlay(app);
@@ -422,6 +424,7 @@ impl SessionController {
         self.show_overlay_and_sync(app).await;
     }
 
+    #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
     async fn apply_session_result<R: tauri::Runtime + 'static>(
         &self,
         app: &tauri::AppHandle<R>,
@@ -482,7 +485,11 @@ impl SessionController {
 
         let (stage, current_session_id, has_processing_task) = {
             let inner = self.inner.lock().await;
-            (inner.stage, inner.session_id, inner.processing_task.is_some())
+            (
+                inner.stage,
+                inner.session_id,
+                inner.processing_task.is_some(),
+            )
         };
 
         match resolve_cancel_decision(stage, current_session_id, has_processing_task) {
@@ -525,7 +532,14 @@ impl SessionController {
                 } else {
                     None
                 };
+                let prepared_task = {
+                    let mut inner = self.inner.lock().await;
+                    inner.prepared_session_task.take()
+                };
                 if let Some(task) = task {
+                    task.abort();
+                }
+                if let Some(task) = prepared_task {
                     task.abort();
                 }
 
@@ -594,8 +608,15 @@ impl SessionController {
                         },
                     )
                 };
+                let prepared_task = {
+                    let mut inner = self.inner.lock().await;
+                    inner.prepared_session_task.take()
+                };
 
                 if let Some(task) = task {
+                    task.abort();
+                }
+                if let Some(task) = prepared_task {
                     task.abort();
                 }
 
@@ -908,14 +929,37 @@ impl SessionController {
                         };
                     }
 
+                    let prepare_started = Instant::now();
+                    let prepare_task = {
+                        let svc_for_prepare = svc.clone();
+                        tauri::async_runtime::spawn(async move {
+                            svc_for_prepare
+                                .prepare_session_context()
+                                .await
+                                .map_err(|e| e.to_string())
+                        })
+                    };
+
+                    {
+                        let mut inner = controller.inner.lock().await;
+                        if let Some(previous) = inner.prepared_session_task.take() {
+                            previous.abort();
+                        }
+                        inner.prepared_session_task = Some(prepare_task);
+                    }
+                    log::debug!(
+                        "started prepared session task at recording start (spawn_ms={})",
+                        prepare_started.elapsed().as_millis()
+                    );
+
                     // Start ElevenLabs realtime session after the recorder is opened, so we can
                     // determine the device sample rate.
                     if wants_realtime {
                         let sr = svc.recording_sample_rate_hz().await.unwrap_or(16_000);
 
                         // Update realtime framing to match the device sample rate.
-                        let frame_len =
-                            ((sr as usize) * (REALTIME_FRAME_MS_DEFAULT as usize) / 1000)
+                        let frame_len = ((sr as usize) * (REALTIME_FRAME_MS_DEFAULT as usize)
+                            / 1000)
                             .max(1)
                             .min(sr as usize);
                         frame_samples.store(frame_len, Ordering::Relaxed);
@@ -985,7 +1029,9 @@ impl SessionController {
                                 let streaming_enabled_for_uploader = streaming_enabled.clone();
                                 let sent_frames_for_uploader = sent_frames.clone();
                                 let uploader_task = tauri::async_runtime::spawn(async move {
-                                    let mut drain_waiter: Option<tokio::sync::oneshot::Sender<bool>> = None;
+                                    let mut drain_waiter: Option<
+                                        tokio::sync::oneshot::Sender<bool>,
+                                    > = None;
                                     let mut drain_ok = true;
 
                                     loop {
@@ -1097,7 +1143,9 @@ impl SessionController {
                                                     .await;
                                             }
                                             RealtimeEvent::Warning { kind: _, message } => {
-                                                log::warn!("ElevenLabs realtime warning: {message}");
+                                                log::warn!(
+                                                    "ElevenLabs realtime warning: {message}"
+                                                );
                                                 // Persist the latest warning so stop-time History can reflect it.
                                                 if let Ok(mut guard) =
                                                     last_warning_for_receiver.lock()
@@ -1216,9 +1264,17 @@ impl SessionController {
                         // Stop feeding new audio frames from the mic callback.
                     }
 
+                    let prepared_session_task = {
+                        let mut inner = self.inner.lock().await;
+                        inner.prepared_session_task.take()
+                    };
+
                     let audio = match svc.clone().stop_recording().await {
                         Ok(a) => a,
                         Err(e) => {
+                            if let Some(task) = prepared_session_task {
+                                task.abort();
+                            }
                             log::error!("stop_recording failed: {e}");
                             self.mark_error(app, e.to_string()).await;
                             return ToggleResult {
@@ -1234,6 +1290,9 @@ impl SessionController {
                     let ms = (n as f64 / 16_000.0) * 1000.0;
                     log::info!("captured audio: {n} samples (~{ms:.0}ms)");
                     if n < 160 {
+                        if let Some(task) = prepared_session_task {
+                            task.abort();
+                        }
                         let msg = "No audio captured from the microphone.".to_string();
                         self.mark_error(app, msg.clone()).await;
                         return ToggleResult {
@@ -1275,11 +1334,13 @@ impl SessionController {
                             );
 
                             let dropped = rt.dropped_chunks.load(Ordering::Relaxed);
-                            let provider_warning = rt.last_warning.lock().ok().and_then(|guard| guard.clone());
+                            let provider_warning =
+                                rt.last_warning.lock().ok().and_then(|guard| guard.clone());
                             if let Some(w) = provider_warning.as_ref() {
                                 log::warn!("ElevenLabs realtime warning (recording): {w}");
                             }
-                            let provider_error = rt.last_error.lock().ok().and_then(|guard| guard.clone());
+                            let provider_error =
+                                rt.last_error.lock().ok().and_then(|guard| guard.clone());
                             let preflight = realtime_preflight_decision(
                                 dropped,
                                 provider_warning.as_deref(),
@@ -1320,11 +1381,9 @@ impl SessionController {
                                     if remaining.is_zero() {
                                         allow_override = false;
                                     } else {
-                                        let queued = tokio::time::timeout(
-                                            remaining,
-                                            rt.audio_tx.send(tail),
-                                        )
-                                        .await;
+                                        let queued =
+                                            tokio::time::timeout(remaining, rt.audio_tx.send(tail))
+                                                .await;
                                         if !matches!(queued, Ok(Ok(()))) {
                                             allow_override = false;
                                             warning = resolve_realtime_finalize_outcome(
@@ -1404,7 +1463,9 @@ impl SessionController {
                                     allow_override = false;
                                 } else {
                                     log::info!("ElevenLabs realtime finalize started");
-                                    match tokio::time::timeout(remaining, rt.handle.finalize()).await {
+                                    match tokio::time::timeout(remaining, rt.handle.finalize())
+                                        .await
+                                    {
                                         Ok(Ok(t)) => {
                                             let decision = resolve_realtime_finalize_outcome(
                                                 warning.take(),
@@ -1443,7 +1504,9 @@ impl SessionController {
                                                 .unwrap_or_else(|| e.to_string());
                                             warning = resolve_realtime_finalize_outcome(
                                                 warning.take(),
-                                                RealtimeFinalizeOutcome::FinalizeError(detail.clone()),
+                                                RealtimeFinalizeOutcome::FinalizeError(
+                                                    detail.clone(),
+                                                ),
                                             )
                                             .warning;
                                             let msg = format!(
@@ -1492,29 +1555,69 @@ impl SessionController {
 
                         let using_override = !transcript_override.trim().is_empty();
 
-                        let res = svc_for_task
-                            .clone()
-                            .run_session_with_hook(
-                                voicewin_runtime::ipc::RunSessionRequest {
-                                    transcript: transcript_override,
-                                    warning,
-                                },
-                                audio,
-                                move |stage| {
-                                    let controller_for_hook = controller_for_hook.clone();
-                                    let app_for_hook = app_for_hook.clone();
-                                    async move {
-                                        if let Some(stage) =
-                                            overlay_stage_for_engine_stage(stage, using_override)
-                                        {
-                                            controller_for_hook
-                                                .set_stage(&app_for_hook, stage)
-                                                .await;
-                                        }
+                        let prepared = match prepared_session_task {
+                            Some(task) => {
+                                let await_started = Instant::now();
+                                match task.await {
+                                    Ok(Ok(prepared)) => {
+                                        log::debug!(
+                                            "prepared session ready: profile={:?} app={:?} elapsed_ms={}",
+                                            prepared.effective_config.matched_profile_name,
+                                            prepared
+                                                .app
+                                                .process_name
+                                                .as_ref()
+                                                .map(|name| name.0.as_str()),
+                                            await_started.elapsed().as_millis()
+                                        );
+                                        Some(prepared)
                                     }
-                                },
-                            )
-                            .await;
+                                    Ok(Err(e)) => {
+                                        log::warn!(
+                                            "prepared session context unavailable; falling back to stop-time capture: {e}"
+                                        );
+                                        None
+                                    }
+                                    Err(e) => {
+                                        log::warn!(
+                                            "prepared session task join failed; falling back to stop-time capture: {e}"
+                                        );
+                                        None
+                                    }
+                                }
+                            }
+                            None => None,
+                        };
+
+                        let req = voicewin_runtime::ipc::RunSessionRequest {
+                            transcript: transcript_override,
+                            warning,
+                        };
+                        let stage_hook = move |stage| {
+                            let controller_for_hook = controller_for_hook.clone();
+                            let app_for_hook = app_for_hook.clone();
+                            async move {
+                                if let Some(stage) =
+                                    overlay_stage_for_engine_stage(stage, using_override)
+                                {
+                                    controller_for_hook.set_stage(&app_for_hook, stage).await;
+                                }
+                            }
+                        };
+
+                        let res = if let Some(prepared) = prepared {
+                            svc_for_task
+                                .clone()
+                                .run_session_with_prepared_with_hook(
+                                    prepared, req, audio, stage_hook,
+                                )
+                                .await
+                        } else {
+                            svc_for_task
+                                .clone()
+                                .run_session_with_hook(req, audio, stage_hook)
+                                .await
+                        };
 
                         // Mark the background task as finished (best-effort).
                         {
@@ -1592,18 +1695,21 @@ pub struct ToggleResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 struct RealtimePreflightDecision {
     allow_override: bool,
     warning: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 struct RealtimeFinalizeDecision {
     transcript_override: String,
     warning: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 struct SessionResultSuccessDecision {
     final_text: Option<String>,
     status_message: Option<String>,
@@ -1624,6 +1730,7 @@ enum CancelDecision {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 enum SessionResultDecision {
     Ignore,
     Success(SessionResultSuccessDecision),
@@ -1637,6 +1744,7 @@ enum SessionResultDecision {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 enum SessionResultSideEffect {
     Ignore,
     ShowOverlay,
@@ -1644,6 +1752,7 @@ enum SessionResultSideEffect {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 struct SessionResultApplyOutcome {
     side_effect: SessionResultSideEffect,
     log_message: Option<String>,
@@ -1662,6 +1771,7 @@ enum RealtimeFinalizeOutcome {
     FinalizeTimedOut,
 }
 
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 fn merge_warning(dst: &mut Option<String>, msg: impl AsRef<str>) {
     let msg = msg.as_ref().trim().to_string();
     if msg.is_empty() {
@@ -1674,11 +1784,13 @@ fn merge_warning(dst: &mut Option<String>, msg: impl AsRef<str>) {
     };
 }
 
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 fn warning_disables_realtime_override(msg: &str) -> bool {
     let lowered = msg.to_lowercase();
     lowered.contains("dropped") || lowered.contains("backpressure")
 }
 
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 fn realtime_preflight_decision(
     dropped_chunks: u64,
     provider_warning: Option<&str>,
@@ -1714,6 +1826,7 @@ fn realtime_preflight_decision(
     }
 }
 
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 fn resolve_realtime_finalize_outcome(
     initial_warning: Option<String>,
     outcome: RealtimeFinalizeOutcome,
@@ -1788,6 +1901,7 @@ fn resolve_realtime_finalize_outcome(
     }
 }
 
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 fn overlay_stage_for_engine_stage(stage: &str, using_override: bool) -> Option<SessionStage> {
     match stage {
         "transcribing" => Some(if using_override {
@@ -1801,6 +1915,7 @@ fn overlay_stage_for_engine_stage(stage: &str, using_override: bool) -> Option<S
     }
 }
 
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 fn resolve_session_result(
     current_session_id: u64,
     result_session_id: u64,
@@ -1812,7 +1927,10 @@ fn resolve_session_result(
 
     match result {
         Ok(r) if r.stage == "done" => {
-            let status_message = r.error.filter(|s| !s.trim().is_empty());
+            let status_message = r
+                .warning
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| r.error.filter(|s| !s.trim().is_empty()));
             let hide_delay = if status_message.is_some() {
                 Duration::from_millis(2500)
             } else {
@@ -1825,15 +1943,26 @@ fn resolve_session_result(
                 hide_delay,
             })
         }
-        Ok(r) if r.stage == "failed" => SessionResultDecision::Failed {
-            final_text: r.final_text,
-            status_message: r
-                .error
-                .unwrap_or_else(|| "Could not insert. Saved to History.".into()),
-        },
-        Ok(r) if r.stage == "error" => SessionResultDecision::Error {
-            status_message: r.error.unwrap_or_else(|| "Session failed".into()),
-        },
+        Ok(r) if r.stage == "failed" => {
+            let mut status_message =
+                Some(r.error.unwrap_or_else(|| "Could not insert. Saved to History.".into()));
+            if let Some(warning) = r.warning {
+                merge_warning(&mut status_message, warning);
+            }
+            SessionResultDecision::Failed {
+                final_text: r.final_text,
+                status_message: status_message.unwrap_or_else(|| "Could not insert. Saved to History.".into()),
+            }
+        }
+        Ok(r) if r.stage == "error" => {
+            let mut status_message = Some(r.error.unwrap_or_else(|| "Session failed".into()));
+            if let Some(warning) = r.warning {
+                merge_warning(&mut status_message, warning);
+            }
+            SessionResultDecision::Error {
+                status_message: status_message.unwrap_or_else(|| "Session failed".into()),
+            }
+        }
         Ok(r) => SessionResultDecision::Error {
             status_message: r
                 .error
@@ -1878,6 +2007,7 @@ fn apply_stage_transition(inner: &mut Inner, stage: SessionStage) {
     }
 }
 
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 fn apply_session_result_to_inner(
     inner: &mut Inner,
     session_id: u64,
@@ -1985,12 +2115,14 @@ fn preview_text(text: &str) -> String {
 //
 // This is intentionally simple and allocation-heavy; correctness + bounded memory first.
 #[derive(Debug, Default)]
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 struct RealtimeFrameChunker {
     buf: Vec<f32>,
     start: usize,
 }
 
 impl RealtimeFrameChunker {
+    #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
     fn push(&mut self, chunk: &[f32], frame_samples: usize) -> Vec<Vec<f32>> {
         if chunk.is_empty() || frame_samples == 0 {
             return Vec::new();
@@ -2014,6 +2146,7 @@ impl RealtimeFrameChunker {
         out
     }
 
+    #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
     fn flush(&mut self) -> Option<Vec<f32>> {
         let remaining = self.buf.len().saturating_sub(self.start);
         if remaining == 0 {
@@ -2072,17 +2205,19 @@ pub fn smooth_level(prev: f32, next: f32, dt: Duration) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::SessionController;
     use super::RealtimeFrameChunker;
+    use super::SessionController;
     use super::{
-        Inner, SessionResultApplyOutcome, SessionResultSideEffect, CancelDecision,
-        CancelSessionDecision,
-        RealtimeFinalizeDecision, RealtimeFinalizeOutcome, SessionResultDecision,
-        SessionResultSuccessDecision, SessionStage, apply_session_result_to_inner,
-        overlay_stage_for_engine_stage, realtime_preflight_decision, resolve_cancel_decision,
-        resolve_realtime_finalize_outcome, resolve_session_result,
+        apply_session_result_to_inner, overlay_stage_for_engine_stage, realtime_preflight_decision,
+        resolve_cancel_decision, resolve_realtime_finalize_outcome, resolve_session_result,
+        CancelDecision, CancelSessionDecision, Inner, RealtimeFinalizeDecision,
+        RealtimeFinalizeOutcome, SessionResultApplyOutcome, SessionResultDecision,
+        SessionResultSideEffect, SessionResultSuccessDecision, SessionStage,
     };
-    use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
     use std::time::Duration;
     use tempfile::tempdir;
     use voicewin_appcore::service::AppService;
@@ -2157,11 +2292,8 @@ mod tests {
 
     #[test]
     fn realtime_preflight_provider_backpressure_warning_forces_batch() {
-        let decision = realtime_preflight_decision(
-            0,
-            Some("Provider reported backpressure drops"),
-            None,
-        );
+        let decision =
+            realtime_preflight_decision(0, Some("Provider reported backpressure drops"), None);
 
         assert!(!decision.allow_override);
         assert_eq!(
@@ -2210,7 +2342,9 @@ mod tests {
         assert_eq!(decision.transcript_override, "");
         assert_eq!(
             decision.warning.as_deref(),
-            Some("Provider warning | ElevenLabs realtime failed; using batch on stop. (quota exceeded)")
+            Some(
+                "Provider warning | ElevenLabs realtime failed; using batch on stop. (quota exceeded)"
+            )
         );
     }
 
@@ -2224,7 +2358,9 @@ mod tests {
         assert_eq!(decision.transcript_override, "");
         assert_eq!(
             decision.warning.as_deref(),
-            Some("Provider warning | ElevenLabs realtime could not finalize in 2s; using batch on stop.")
+            Some(
+                "Provider warning | ElevenLabs realtime could not finalize in 2s; using batch on stop."
+            )
         );
     }
 
@@ -2257,6 +2393,7 @@ mod tests {
             Ok(RunSessionResponse {
                 stage: "done".into(),
                 final_text: Some("late transcript".into()),
+                warning: None,
                 error: None,
             }),
         );
@@ -2272,7 +2409,8 @@ mod tests {
             Ok(RunSessionResponse {
                 stage: "done".into(),
                 final_text: Some("final text".into()),
-                error: Some("Enhancement failed; inserted raw transcript.".into()),
+                warning: Some("Enhancement failed; inserted raw transcript.".into()),
+                error: None,
             }),
         );
 
@@ -2294,6 +2432,7 @@ mod tests {
             Ok(RunSessionResponse {
                 stage: "failed".into(),
                 final_text: Some("recoverable text".into()),
+                warning: None,
                 error: Some("Accessibility permissions required".into()),
             }),
         );
@@ -2315,6 +2454,7 @@ mod tests {
             Ok(RunSessionResponse {
                 stage: "failed".into(),
                 final_text: Some("recoverable text".into()),
+                warning: None,
                 error: None,
             }),
         );
@@ -2329,6 +2469,28 @@ mod tests {
     }
 
     #[test]
+    fn failed_session_result_merges_warning_message() {
+        let decision = resolve_session_result(
+            4,
+            4,
+            Ok(RunSessionResponse {
+                stage: "failed".into(),
+                final_text: Some("recoverable text".into()),
+                warning: Some("LLM output looked conversational; VoiceWin fell back to the dictated transcript.".into()),
+                error: Some("Accessibility permissions required".into()),
+            }),
+        );
+
+        assert_eq!(
+            decision,
+            SessionResultDecision::Failed {
+                final_text: Some("recoverable text".into()),
+                status_message: "Accessibility permissions required | LLM output looked conversational; VoiceWin fell back to the dictated transcript.".into(),
+            }
+        );
+    }
+
+    #[test]
     fn error_stage_session_result_preserves_error_message() {
         let decision = resolve_session_result(
             4,
@@ -2336,6 +2498,7 @@ mod tests {
             Ok(RunSessionResponse {
                 stage: "error".into(),
                 final_text: None,
+                warning: None,
                 error: Some("engine pipeline failed".into()),
             }),
         );
@@ -2530,7 +2693,9 @@ mod tests {
         }
 
         let app = tauri::test::mock_app();
-        let result = controller.cancel_recording(app.handle(), test_service()).await;
+        let result = controller
+            .cancel_recording(app.handle(), test_service())
+            .await;
         tokio::time::sleep(Duration::from_millis(10)).await;
 
         let inner = controller.inner.lock().await;
@@ -2551,7 +2716,9 @@ mod tests {
         }
 
         let app = tauri::test::mock_app();
-        let result = controller.cancel_recording(app.handle(), test_service()).await;
+        let result = controller
+            .cancel_recording(app.handle(), test_service())
+            .await;
 
         let inner = controller.inner.lock().await;
         assert_eq!(result.stage, "idle");
@@ -2653,7 +2820,9 @@ mod tests {
         let stop_controller = controller.clone();
 
         let stop_task = tauri::async_runtime::spawn(async move {
-            stop_controller.toggle_recording(&stop_app, test_service()).await
+            stop_controller
+                .toggle_recording(&stop_app, test_service())
+                .await
         });
 
         tokio::time::timeout(
@@ -2663,7 +2832,9 @@ mod tests {
         .await
         .unwrap();
 
-        let cancel_result = controller.cancel_recording(&cancel_app, test_service()).await;
+        let cancel_result = controller
+            .cancel_recording(&cancel_app, test_service())
+            .await;
         controller.release_transition_pause();
         let stop_result = stop_task.await.unwrap();
 
@@ -2674,5 +2845,4 @@ mod tests {
         let inner = controller.inner.lock().await;
         assert_eq!(inner.session_id, 21);
     }
-
 }

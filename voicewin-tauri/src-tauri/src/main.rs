@@ -94,8 +94,8 @@ const BUNDLED_TINY_MODEL_ID: &str = "whisper-tiny-bundled";
 #[cfg(any(windows, target_os = "macos"))]
 use voicewin_audio::{AudioInputDeviceInfo, AudioRecorder};
 
-mod session_controller;
 mod runtime_smoke;
+mod session_controller;
 mod startup_smoke;
 mod tray_icon;
 use session_controller::{SessionController, ToggleResult};
@@ -234,11 +234,7 @@ async fn build_service_base(app: &tauri::AppHandle) -> anyhow::Result<AppService
         Arc::new(voicewin_platform::macos::MacosContextProvider::default());
     #[cfg(all(not(windows), not(target_os = "macos")))]
     let ctx: Arc<dyn voicewin_engine::traits::AppContextProvider> =
-        voicewin_platform::test::TestContextProvider::new(
-            voicewin_core::types::AppIdentity::new().with_process_name("linux"),
-            Default::default(),
-        )
-        .boxed();
+        Arc::new(voicewin_platform::linux::LinuxContextProvider::default());
 
     #[cfg(windows)]
     let inserter: Arc<dyn voicewin_engine::traits::Inserter> =
@@ -248,7 +244,12 @@ async fn build_service_base(app: &tauri::AppHandle) -> anyhow::Result<AppService
         Arc::new(voicewin_platform::macos::MacosInserter::default());
     #[cfg(all(not(windows), not(target_os = "macos")))]
     let inserter: Arc<dyn voicewin_engine::traits::Inserter> =
-        Arc::new(voicewin_platform::test::StdoutInserter);
+        Arc::new(voicewin_platform::linux::LinuxInserter::default());
+
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    log::info!(
+        "linux platform provider enabled: clipboard_context=true clipboard_insert=true selected_text=false window_context=false screenshot_capture=false foreground_app_lookup=false"
+    );
 
     Ok(AppService::new(config_path, ctx, inserter))
 }
@@ -301,7 +302,7 @@ fn default_config_for_app(svc: &AppService, app: &tauri::AppHandle) -> Result<Ap
         defaults: d,
         profiles: vec![],
         prompts: voicewin_runtime::defaults::default_prompt_templates(),
-        llm_api_key_present: svc.get_openai_api_key_present().unwrap_or(false),
+        llm_api_key_present: llm_api_key_present(svc),
     };
 
     Ok(cfg)
@@ -323,7 +324,7 @@ fn runtime_smoke_config(svc: &AppService, app: &tauri::AppHandle) -> Result<AppC
             defaults: smoke_defaults.clone(),
             profiles: vec![],
             prompts: vec![],
-            llm_api_key_present: svc.get_openai_api_key_present().unwrap_or(false),
+            llm_api_key_present: llm_api_key_present(svc),
         },
         smoke_defaults,
     ))
@@ -339,7 +340,25 @@ async fn build_runtime_smoke_service(
 
 fn load_or_init_config(svc: &AppService, app: &tauri::AppHandle) -> Result<AppConfig, String> {
     match svc.load_config() {
-        Ok(cfg) => Ok(cfg),
+        Ok(mut cfg) => {
+            let mut changed = false;
+            if voicewin_runtime::defaults::backfill_default_prompts(&mut cfg) {
+                changed = true;
+            }
+            if voicewin_runtime::defaults::migrate_legacy_openai_defaults_to_recommended(&mut cfg)
+            {
+                changed = true;
+            }
+            if voicewin_runtime::defaults::migrate_legacy_openai_profile_overrides_to_recommended(
+                &mut cfg,
+            ) {
+                changed = true;
+            }
+            if changed {
+                svc.save_config(&cfg).map_err(|e| e.to_string())?;
+            }
+            Ok(cfg)
+        }
         Err(_) => init_default_config(svc, app),
     }
 }
@@ -412,7 +431,136 @@ fn normalize_model_path_to_models_dir(
     None
 }
 
+fn llm_api_key_present(svc: &AppService) -> bool {
+    svc.get_openai_api_key_present().unwrap_or(false)
+        || svc.get_gemini_api_key_present().unwrap_or(false)
+}
+
+fn validate_llm_provider_kind(value: &str, label: &str) -> Result<(), String> {
+    match value.trim() {
+        "openai_compatible" | "gemini" => Ok(()),
+        other => Err(format!(
+            "{label} must be one of: openai_compatible, gemini (got {other:?})"
+        )),
+    }
+}
+
+fn validate_llm_api_kind(value: &str, label: &str) -> Result<(), String> {
+    match value.trim() {
+        "responses_sse" | "chat_completions" | "stream_generate_content_sse" => Ok(()),
+        other => Err(format!(
+            "{label} must be one of: responses_sse, chat_completions, stream_generate_content_sse (got {other:?})"
+        )),
+    }
+}
+
+fn validate_llm_preflight_mode(value: &str, label: &str) -> Result<(), String> {
+    match value.trim() {
+        "off" | "http_connect" => Ok(()),
+        other => Err(format!(
+            "{label} must be one of: off, http_connect (got {other:?})"
+        )),
+    }
+}
+
+fn validate_llm_preflight_delay_ms(value: u64, label: &str) -> Result<(), String> {
+    if value > 60_000 {
+        return Err(format!(
+            "{label} must be between 0 and 60000 milliseconds (got {value})"
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_llm_reasoning_effort(value: Option<&str>, label: &str) -> Result<(), String> {
+    match value.map(str::trim) {
+        None | Some("") => Ok(()),
+        Some("minimal" | "low" | "medium" | "high") => Ok(()),
+        Some(other) => Err(format!(
+            "{label} must be empty or one of: minimal, low, medium, high (got {other:?})"
+        )),
+    }
+}
+
+fn validate_llm_provider_api_pair(
+    provider_kind: &str,
+    api_kind: &str,
+    label: &str,
+) -> Result<(), String> {
+    let provider_kind = provider_kind.trim();
+    let api_kind = api_kind.trim();
+
+    match provider_kind {
+        "openai_compatible" if matches!(api_kind, "responses_sse" | "chat_completions") => Ok(()),
+        "gemini" if api_kind == "stream_generate_content_sse" => Ok(()),
+        "openai_compatible" => Err(format!(
+            "{label} uses openai_compatible but api kind {api_kind:?} is not supported"
+        )),
+        "gemini" => Err(format!(
+            "{label} uses gemini but api kind {api_kind:?} is not supported"
+        )),
+        _ => Ok(()),
+    }
+}
+
 fn validate_config(cfg: &AppConfig) -> Result<(), String> {
+    validate_llm_provider_kind(
+        &cfg.defaults.llm_provider_kind,
+        "defaults.llm_provider_kind",
+    )?;
+    validate_llm_api_kind(&cfg.defaults.llm_api_kind, "defaults.llm_api_kind")?;
+    validate_llm_preflight_mode(
+        &cfg.defaults.llm_preflight_mode,
+        "defaults.llm_preflight_mode",
+    )?;
+    validate_llm_preflight_delay_ms(
+        cfg.defaults.llm_preflight_delay_ms,
+        "defaults.llm_preflight_delay_ms",
+    )?;
+    validate_llm_reasoning_effort(
+        cfg.defaults.llm_reasoning_effort.as_deref(),
+        "defaults.llm_reasoning_effort",
+    )?;
+    validate_llm_provider_api_pair(
+        &cfg.defaults.llm_provider_kind,
+        &cfg.defaults.llm_api_kind,
+        "defaults",
+    )?;
+
+    for profile in &cfg.profiles {
+        let profile_provider_kind = profile
+            .overrides
+            .llm_provider_kind
+            .as_deref()
+            .unwrap_or(&cfg.defaults.llm_provider_kind);
+        let profile_api_kind = profile
+            .overrides
+            .llm_api_kind
+            .as_deref()
+            .unwrap_or(&cfg.defaults.llm_api_kind);
+
+        if let Some(value) = profile.overrides.llm_provider_kind.as_deref() {
+            let label = format!("profile '{}' override llm_provider_kind", profile.name);
+            validate_llm_provider_kind(value, &label)?;
+        }
+        if let Some(value) = profile.overrides.llm_api_kind.as_deref() {
+            let label = format!("profile '{}' override llm_api_kind", profile.name);
+            validate_llm_api_kind(value, &label)?;
+        }
+        if let Some(value) = profile.overrides.llm_preflight_mode.as_deref() {
+            let label = format!("profile '{}' override llm_preflight_mode", profile.name);
+            validate_llm_preflight_mode(value, &label)?;
+        }
+        if let Some(value) = profile.overrides.llm_reasoning_effort.as_deref() {
+            let label = format!("profile '{}' override llm_reasoning_effort", profile.name);
+            validate_llm_reasoning_effort(Some(value), &label)?;
+        }
+
+        let label = format!("profile '{}'", profile.name);
+        validate_llm_provider_api_pair(profile_provider_kind, profile_api_kind, &label)?;
+    }
+
     if cfg.defaults.stt_provider == "local" {
         // For local whisper, `stt_model` must be a path to a whisper.cpp GGML `.bin` model.
         let p = std::path::Path::new(&cfg.defaults.stt_model);
@@ -450,7 +598,7 @@ async fn get_config(
 
     let mut cfg = load_or_init_config(svc, &app)?;
     // Reflect current secret-store state (not just what's stored on disk).
-    cfg.llm_api_key_present = svc.get_openai_api_key_present().unwrap_or(false);
+    cfg.llm_api_key_present = llm_api_key_present(svc);
     Ok(cfg)
 }
 
@@ -487,7 +635,8 @@ async fn set_config(
     }
 
     // Never trust the frontend for secret state; refresh the key-present bit from storage.
-    cfg.llm_api_key_present = svc.get_openai_api_key_present().unwrap_or(false);
+    cfg.llm_api_key_present = llm_api_key_present(svc);
+    voicewin_runtime::defaults::backfill_default_prompts(&mut cfg);
 
     validate_config(&cfg)?;
 
@@ -506,6 +655,117 @@ async fn set_config(
     }
 
     Ok(())
+}
+
+#[tauri::command]
+async fn preview_prompt(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    req: voicewin_runtime::ipc::PromptPreviewRequest,
+) -> Result<voicewin_runtime::ipc::PromptPreviewResponse, String> {
+    let svc = state
+        .service
+        .get_or_try_init(|| async { build_service(&app).await })
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if let Some(context_override) = req.context_override {
+        let app_id = match svc.get_foreground_app().await {
+            Ok(app_id) => app_id,
+            Err(e) => {
+                log::warn!("preview_prompt could not capture foreground app; using defaults: {e}");
+                voicewin_core::types::AppIdentity::new()
+            }
+        };
+        let snapshot = apply_prompt_context_override(
+            svc.capture_context_snapshot().await,
+            context_override,
+        );
+        svc.preview_prompt_with_app_snapshot(
+            req.prompt,
+            req.transcript,
+            app_id,
+            snapshot,
+            req.forced_profile_id,
+            req.force_defaults,
+        )
+        .await
+        .map_err(|e| e.to_string())
+    } else {
+        svc.preview_prompt(
+            req.prompt,
+            req.transcript,
+            req.forced_profile_id,
+            req.force_defaults,
+        )
+        .await
+        .map_err(|e| e.to_string())
+    }
+}
+
+fn apply_prompt_context_override(
+    mut snapshot: voicewin_engine::traits::ContextSnapshot,
+    override_ctx: voicewin_runtime::ipc::PromptPreviewContextOverride,
+) -> voicewin_engine::traits::ContextSnapshot {
+    if let Some(value) = override_ctx
+        .clipboard
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        snapshot.clipboard = Some(value.to_string());
+    }
+    if let Some(value) = override_ctx
+        .selected_text
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        snapshot.selected_text = Some(value.to_string());
+    }
+    if let Some(value) = override_ctx
+        .window_context
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        snapshot.window_context = Some(value.to_string());
+    }
+    if let Some(value) = override_ctx
+        .screenshot_data_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        snapshot.screenshot = Some(voicewin_core::context::ImageArtifact {
+            data_url: value.to_string(),
+        });
+    }
+    snapshot
+}
+
+#[tauri::command]
+async fn probe_llm_provider(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    req: voicewin_runtime::ipc::ProviderProbeRequest,
+) -> Result<voicewin_runtime::ipc::ProviderProbeResponse, String> {
+    let svc = state
+        .service
+        .get_or_try_init(|| async { build_service(&app).await })
+        .await
+        .map_err(|e| e.to_string())?;
+
+    svc.probe_llm_provider(
+        &req.provider_kind,
+        &req.api_kind,
+        &req.base_url,
+        &req.model,
+        req.reasoning_effort.as_deref(),
+        req.probe_kind,
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[derive(serde::Serialize)]
@@ -738,6 +998,150 @@ async fn delete_history_entry_by_id(app: tauri::AppHandle, id: String) -> Result
     store.delete_entry_by_id(&id).map_err(|e| e.to_string())
 }
 
+fn history_replay_transcript(entry: &voicewin_runtime::history::HistoryEntry) -> Option<String> {
+    [
+        entry.raw_transcript.as_deref(),
+        Some(entry.text.as_str()),
+        entry.enhanced_text.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(str::trim)
+    .find(|value| !value.is_empty())
+    .map(ToOwned::to_owned)
+}
+
+fn history_replay_prompt(
+    cfg: &AppConfig,
+    entry: &voicewin_runtime::history::HistoryEntry,
+) -> Option<voicewin_core::enhancement::PromptTemplate> {
+    let by_id = entry.prompt_id.as_ref().and_then(|prompt_id| {
+        cfg.prompts
+            .iter()
+            .find(|prompt| prompt.id.0.to_string() == *prompt_id)
+            .cloned()
+    });
+    if by_id.is_some() {
+        return by_id;
+    }
+
+    let by_title = entry.prompt_title.as_ref().and_then(|prompt_title| {
+        cfg.prompts
+            .iter()
+            .find(|prompt| prompt.title == *prompt_title)
+            .cloned()
+    });
+    if by_title.is_some() {
+        return by_title;
+    }
+
+    cfg.defaults
+        .prompt_id
+        .as_ref()
+        .and_then(|prompt_id| cfg.prompts.iter().find(|prompt| prompt.id == *prompt_id))
+        .cloned()
+        .or_else(|| cfg.prompts.first().cloned())
+}
+
+fn history_replay_app(
+    entry: &voicewin_runtime::history::HistoryEntry,
+) -> voicewin_core::types::AppIdentity {
+    let mut app = voicewin_core::types::AppIdentity::new();
+    if let Some(exe_path) = entry
+        .app_exe_path
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        app = app.with_exe_path(exe_path.to_string());
+    }
+    if let Some(process_name) = entry
+        .app_process_name
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        app = app.with_process_name(process_name.to_string());
+    }
+    if let Some(window_title) = entry
+        .app_window_title
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        app = app.with_window_title(window_title.to_string());
+    }
+    app
+}
+
+fn history_replay_snapshot(
+    entry: &voicewin_runtime::history::HistoryEntry,
+) -> voicewin_engine::traits::ContextSnapshot {
+    let process_name = entry
+        .app_process_name
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
+    let window_title = entry
+        .app_window_title
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
+
+    let window_context = if process_name.is_none() && window_title.is_none() {
+        None
+    } else {
+        Some(format!(
+            "Application: {}\nActive Window: {}",
+            process_name.unwrap_or("unknown"),
+            window_title.unwrap_or("")
+        ))
+    };
+
+    voicewin_engine::traits::ContextSnapshot {
+        window_context,
+        ..Default::default()
+    }
+}
+
+#[tauri::command]
+async fn preview_history_entry(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<voicewin_runtime::ipc::PromptPreviewResponse, String> {
+    let svc = state
+        .service
+        .get_or_try_init(|| async { build_service(&app).await })
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let cfg = load_or_init_config(svc, &app)?;
+    let path = default_history_path(&app).map_err(|e| e.to_string())?;
+    let store = voicewin_runtime::history::HistoryStore::at_path(path);
+    let entries = store.load().map_err(|e| e.to_string())?;
+    let entry = entries
+        .into_iter()
+        .rfind(|entry| entry.id == id)
+        .ok_or_else(|| format!("history entry not found: {id}"))?;
+
+    let prompt = history_replay_prompt(&cfg, &entry)
+        .ok_or_else(|| "no prompt available for history replay".to_string())?;
+    let transcript = history_replay_transcript(&entry)
+        .ok_or_else(|| "history entry has no replayable transcript".to_string())?;
+
+    svc.preview_prompt_with_app_snapshot(
+        prompt,
+        transcript,
+        history_replay_app(&entry),
+        history_replay_snapshot(&entry),
+        None,
+        false,
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
 #[derive(serde::Serialize)]
 struct ModelStatus {
     pub bootstrap_ok: bool,
@@ -750,12 +1154,19 @@ struct ModelStatus {
 struct ProviderStatus {
     pub openai_api_key_present: bool,
     pub openai_api_key_error: Option<String>,
+    pub gemini_api_key_present: bool,
+    pub gemini_api_key_error: Option<String>,
     pub elevenlabs_api_key_present: bool,
     pub elevenlabs_api_key_error: Option<String>,
 }
 
 fn provider_status(svc: &AppService) -> ProviderStatus {
     let (openai_api_key_present, openai_api_key_error) = match svc.get_openai_api_key_present() {
+        Ok(v) => (v, None),
+        Err(e) => (false, Some(e.to_string())),
+    };
+
+    let (gemini_api_key_present, gemini_api_key_error) = match svc.get_gemini_api_key_present() {
         Ok(v) => (v, None),
         Err(e) => (false, Some(e.to_string())),
     };
@@ -769,6 +1180,8 @@ fn provider_status(svc: &AppService) -> ProviderStatus {
     ProviderStatus {
         openai_api_key_present,
         openai_api_key_error,
+        gemini_api_key_present,
+        gemini_api_key_error,
         elevenlabs_api_key_present,
         elevenlabs_api_key_error,
     }
@@ -834,6 +1247,53 @@ async fn clear_openai_api_key(
         .map_err(|e| e.to_string())?;
 
     svc.clear_openai_api_key().map_err(|e| e.to_string())?;
+    Ok(provider_status(&svc))
+}
+
+#[tauri::command]
+async fn set_gemini_api_key(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    api_key: String,
+) -> Result<ProviderStatus, String> {
+    let svc = state
+        .service
+        .get_or_try_init(|| async { build_service(&app).await })
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let trimmed = api_key.trim();
+    if trimmed.is_empty() {
+        return Err("API key cannot be empty. Use Clear to remove it.".into());
+    }
+
+    svc.set_gemini_api_key(trimmed).map_err(|e| e.to_string())?;
+
+    let status = provider_status(&svc);
+    if let Some(e) = &status.gemini_api_key_error {
+        return Err(format!(
+            "Saved key but failed to verify secret storage state: {e}"
+        ));
+    }
+    if !status.gemini_api_key_present {
+        return Err("Saved key but it is still not present in secret storage.".into());
+    }
+
+    Ok(status)
+}
+
+#[tauri::command]
+async fn clear_gemini_api_key(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<ProviderStatus, String> {
+    let svc = state
+        .service
+        .get_or_try_init(|| async { build_service(&app).await })
+        .await
+        .map_err(|e| e.to_string())?;
+
+    svc.clear_gemini_api_key().map_err(|e| e.to_string())?;
     Ok(provider_status(&svc))
 }
 
@@ -1409,6 +1869,63 @@ struct MacosPermissionsStatus {
     accessibility_trusted: bool,
 }
 
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+struct PlatformCapabilities {
+    platform: &'static str,
+    foreground_app_identity: bool,
+    clipboard_context: bool,
+    selected_text_context: bool,
+    window_context: bool,
+    screenshot_capture: bool,
+    foreground_window_capture: bool,
+    auto_insert: bool,
+}
+
+#[tauri::command]
+async fn get_platform_capabilities() -> Result<PlatformCapabilities, String> {
+    #[cfg(windows)]
+    {
+        Ok(PlatformCapabilities {
+            platform: "windows",
+            foreground_app_identity: true,
+            clipboard_context: true,
+            selected_text_context: true,
+            window_context: true,
+            screenshot_capture: true,
+            foreground_window_capture: true,
+            auto_insert: true,
+        })
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Ok(PlatformCapabilities {
+            platform: "macos",
+            foreground_app_identity: true,
+            clipboard_context: true,
+            selected_text_context: true,
+            window_context: true,
+            screenshot_capture: true,
+            foreground_window_capture: false,
+            auto_insert: true,
+        })
+    }
+
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        Ok(PlatformCapabilities {
+            platform: "linux",
+            foreground_app_identity: false,
+            clipboard_context: true,
+            selected_text_context: false,
+            window_context: false,
+            screenshot_capture: false,
+            foreground_window_capture: false,
+            auto_insert: false,
+        })
+    }
+}
+
 #[tauri::command]
 async fn get_macos_permissions_status() -> Result<MacosPermissionsStatus, String> {
     #[cfg(target_os = "macos")]
@@ -1480,6 +1997,15 @@ fn emit_runtime_smoke_start_process_output(smoke_mode: &runtime_smoke::RuntimeSm
         let _ = std::io::Write::flush(&mut stdout);
     }
     log::info!("{}", smoke_mode.start_marker);
+}
+
+fn request_smoke_process_exit(handle: tauri::AppHandle, exit_code: i32) {
+    handle.exit(exit_code);
+
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        std::process::exit(exit_code);
+    });
 }
 
 async fn run_runtime_smoke(
@@ -1578,7 +2104,17 @@ async fn run_runtime_smoke(
 
     emit_runtime_smoke_process_output(&smoke_mode.stage_marker(&response.stage));
     if response.stage == "done" {
-        if let Some(warning) = response.error.as_deref().filter(|warning| !warning.trim().is_empty()) {
+        if let Some(warning) = response
+            .warning
+            .as_deref()
+            .filter(|warning| !warning.trim().is_empty())
+            .or_else(|| {
+                response
+                    .error
+                    .as_deref()
+                    .filter(|warning| !warning.trim().is_empty())
+            })
+        {
             log::warn!("runtime smoke completed with non-fatal warning: {warning}");
         }
         emit_runtime_smoke_process_output(&smoke_mode.success_marker);
@@ -1586,7 +2122,23 @@ async fn run_runtime_smoke(
     }
 
     if let Some(error) = response.error.as_deref() {
-        log::error!("runtime smoke failed: stage={} error={error}", response.stage);
+        log::error!(
+            "runtime smoke failed: stage={} error={error}",
+            response.stage
+        );
+        if let Some(warning) = response.warning.as_deref().filter(|warning| !warning.trim().is_empty())
+        {
+            log::warn!("runtime smoke failure carried warning: {warning}");
+        }
+    } else if let Some(warning) = response
+        .warning
+        .as_deref()
+        .filter(|warning| !warning.trim().is_empty())
+    {
+        log::error!(
+            "runtime smoke failed: stage={} warning={warning}",
+            response.stage
+        );
     } else {
         log::error!("runtime smoke failed: stage={}", response.stage);
     }
@@ -1676,6 +2228,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_config,
             set_config,
+            preview_prompt,
+            probe_llm_provider,
             toggle_recording,
             cancel_recording,
             get_session_status,
@@ -1687,9 +2241,12 @@ fn main() {
             clear_history,
             delete_history_entry,
             delete_history_entry_by_id,
+            preview_history_entry,
             get_provider_status,
             set_openai_api_key,
             clear_openai_api_key,
+            set_gemini_api_key,
+            clear_gemini_api_key,
             set_elevenlabs_api_key,
             clear_elevenlabs_api_key,
             get_model_status,
@@ -1707,6 +2264,7 @@ fn main() {
             overlay_ready,
             overlay_dismiss,
             show_main_window,
+            get_platform_capabilities,
             get_macos_permissions_status,
             prompt_macos_accessibility_permission,
             #[cfg(target_os = "macos")]
@@ -1732,7 +2290,7 @@ fn main() {
                 }
                 let _ = std::io::Write::flush(&mut stdout);
                 log::info!("{}", smoke_mode.marker);
-                app.handle().exit(0);
+                request_smoke_process_exit(app.handle().clone(), 0);
                 return Ok(());
             }
 
@@ -1747,7 +2305,7 @@ fn main() {
                 });
                 tauri::async_runtime::spawn(async move {
                     let exit_code = run_runtime_smoke(handle.clone(), runtime_smoke_mode).await;
-                    handle.exit(exit_code);
+                    request_smoke_process_exit(handle, exit_code);
                 });
                 return Ok(());
             }

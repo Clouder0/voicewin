@@ -7,6 +7,7 @@ publish = false
 
 [dependencies]
 anyhow = "1"
+async-trait = "0.1"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
@@ -17,6 +18,5 @@ voicewin-runtime = { path = "../voicewin-runtime" }
 voicewin-audio = { path = "../voicewin-audio" }
 
 [dev-dependencies]
-async-trait = "0.1"
 tempfile = "3"
 wiremock = "0.6"

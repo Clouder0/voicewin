@@ -10,6 +10,7 @@ const SECRETS_FILENAME: &str = "secrets.json";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecretKey {
     OpenAiCompatibleApiKey,
+    GeminiApiKey,
     ElevenLabsApiKey,
 }
 
@@ -17,6 +18,7 @@ impl SecretKey {
     fn user(self) -> &'static str {
         match self {
             SecretKey::OpenAiCompatibleApiKey => "openai_compatible_api_key",
+            SecretKey::GeminiApiKey => "gemini_api_key",
             SecretKey::ElevenLabsApiKey => "elevenlabs_api_key",
         }
     }
@@ -61,10 +63,26 @@ fn secret_store_path() -> PathBuf {
 }
 
 pub fn set_secret(key: SecretKey, value: &str) -> anyhow::Result<()> {
+    set_secret_at_path(secret_store_path(), key, value)
+}
+
+pub fn get_secret(key: SecretKey) -> anyhow::Result<Option<String>> {
+    get_secret_at_path(secret_store_path(), key)
+}
+
+pub fn delete_secret(key: SecretKey) -> anyhow::Result<()> {
+    delete_secret_at_path(secret_store_path(), key)
+}
+
+pub fn set_secret_at_path(
+    path: impl Into<PathBuf>,
+    key: SecretKey,
+    value: &str,
+) -> anyhow::Result<()> {
     let _guard = store_io_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let path = secret_store_path();
+    let path = path.into();
     let mut store = read_store_file(&path)?;
     store
         .entries
@@ -72,20 +90,23 @@ pub fn set_secret(key: SecretKey, value: &str) -> anyhow::Result<()> {
     write_store_file(&path, &store)
 }
 
-pub fn get_secret(key: SecretKey) -> anyhow::Result<Option<String>> {
+pub fn get_secret_at_path(
+    path: impl Into<PathBuf>,
+    key: SecretKey,
+) -> anyhow::Result<Option<String>> {
     let _guard = store_io_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let path = secret_store_path();
+    let path = path.into();
     let store = read_store_file(&path)?;
     Ok(store.entries.get(key.user()).cloned())
 }
 
-pub fn delete_secret(key: SecretKey) -> anyhow::Result<()> {
+pub fn delete_secret_at_path(path: impl Into<PathBuf>, key: SecretKey) -> anyhow::Result<()> {
     let _guard = store_io_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let path = secret_store_path();
+    let path = path.into();
     let mut store = read_store_file(&path)?;
     if store.entries.remove(key.user()).is_some() {
         write_store_file(&path, &store)?;
@@ -147,6 +168,7 @@ mod tests {
         configure_secret_store_path(dir.path().join("secrets.json"));
 
         delete_secret(SecretKey::ElevenLabsApiKey).unwrap();
+        delete_secret(SecretKey::GeminiApiKey).unwrap();
         delete_secret(SecretKey::OpenAiCompatibleApiKey).unwrap();
 
         assert_eq!(get_secret(SecretKey::ElevenLabsApiKey).unwrap(), None);
@@ -177,11 +199,16 @@ mod tests {
         configure_secret_store_path(dir.path().join("secrets.json"));
 
         set_secret(SecretKey::ElevenLabsApiKey, "xi_test_123").unwrap();
+        set_secret(SecretKey::GeminiApiKey, "gem_test_123").unwrap();
         set_secret(SecretKey::OpenAiCompatibleApiKey, "sk_test_123").unwrap();
 
         delete_secret(SecretKey::ElevenLabsApiKey).unwrap();
 
         assert_eq!(get_secret(SecretKey::ElevenLabsApiKey).unwrap(), None);
+        assert_eq!(
+            get_secret(SecretKey::GeminiApiKey).unwrap(),
+            Some("gem_test_123".to_string())
+        );
         assert_eq!(
             get_secret(SecretKey::OpenAiCompatibleApiKey).unwrap(),
             Some("sk_test_123".to_string())

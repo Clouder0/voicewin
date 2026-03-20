@@ -12,6 +12,7 @@ it('renders the spec shell and default hotkey text', async () => {
   // Navigation rail exists.
   expect(screen.getByRole('button', { name: 'Overview' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Profiles' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Prompts' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Models' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'History' })).toBeInTheDocument();
 });

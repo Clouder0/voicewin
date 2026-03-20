@@ -7,6 +7,7 @@
 
     "allow-get-config",
     "allow-set-config",
+    "allow-preview-prompt",
 
     "allow-toggle-recording",
     "allow-cancel-recording",
@@ -15,10 +16,13 @@
     "allow-get-history",
     "allow-clear-history",
     "allow-delete-history-entry",
+    "allow-delete-history-entry-by-id",
 
     "allow-get-provider-status",
     "allow-set-openai-api-key",
     "allow-clear-openai-api-key",
+    "allow-set-gemini-api-key",
+    "allow-clear-gemini-api-key",
     "allow-set-elevenlabs-api-key",
     "allow-clear-elevenlabs-api-key",
 

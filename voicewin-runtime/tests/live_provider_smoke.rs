@@ -3,7 +3,9 @@ use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 use voicewin_engine::traits::{AudioInput, SttProvider};
-use voicewin_providers::elevenlabs_realtime::{ElevenLabsRealtimeConfig, RealtimeEvent, spawn_realtime_session};
+use voicewin_providers::elevenlabs_realtime::{
+    ElevenLabsRealtimeConfig, RealtimeEvent, spawn_realtime_session,
+};
 use voicewin_runtime::stt::ElevenLabsSttProvider;
 
 fn fixture_path() -> PathBuf {
@@ -20,7 +22,10 @@ fn load_fixture_audio() -> anyhow::Result<AudioInput> {
         .with_context(|| format!("open fixture audio at {}", path.display()))?;
     let spec = reader.spec();
     if spec.channels != 1 {
-        return Err(anyhow!("expected mono fixture audio, got {} channels", spec.channels));
+        return Err(anyhow!(
+            "expected mono fixture audio, got {} channels",
+            spec.channels
+        ));
     }
 
     let samples = match spec.sample_format {
@@ -159,7 +164,9 @@ async fn transcribes_fixture_with_live_elevenlabs_realtime() {
     });
 
     for chunk in audio.samples.chunks(800) {
-        let sent = handle.send_audio_chunk(voicewin_runtime::stt::encode_pcm_s16le_mono(chunk)).await;
+        let sent = handle
+            .send_audio_chunk(voicewin_runtime::stt::encode_pcm_s16le_mono(chunk))
+            .await;
         assert!(sent, "realtime audio chunk should send");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }

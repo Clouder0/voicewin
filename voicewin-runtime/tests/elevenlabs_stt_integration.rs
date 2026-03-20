@@ -30,7 +30,9 @@ impl Drop for ScopedEnvVar {
 }
 
 fn env_guard() -> std::sync::MutexGuard<'static, ()> {
-    ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn sixteen_khz_audio() -> AudioInput {
@@ -51,7 +53,10 @@ async fn transcribe_normalizes_realtime_model_and_hits_mock_server() {
         .and(header("xi-api-key", "test-key"))
         .and(body_string_contains("name=\"model_id\""))
         .and(body_string_contains("scribe_v2"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw("{\"text\":\"fixture transcript\"}", "application/json"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw("{\"text\":\"fixture transcript\"}", "application/json"),
+        )
         .mount(&server)
         .await;
 
@@ -111,8 +116,14 @@ async fn transcribe_surfaces_non_success_status_with_response_body() {
         .expect_err("non-success status should fail");
 
     let message = err.to_string();
-    assert!(message.contains("status=401"), "unexpected error: {message}");
-    assert!(message.contains("bad api key"), "unexpected error: {message}");
+    assert!(
+        message.contains("status=401"),
+        "unexpected error: {message}"
+    );
+    assert!(
+        message.contains("bad api key"),
+        "unexpected error: {message}"
+    );
 }
 
 #[tokio::test]
@@ -152,7 +163,10 @@ async fn transcribe_includes_explicit_language_in_request_body() {
 
     Mock::given(method("POST"))
         .and(path("/speech-to-text"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw("{\"text\":\"fixture transcript\"}", "application/json"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw("{\"text\":\"fixture transcript\"}", "application/json"),
+        )
         .mount(&server)
         .await;
 

@@ -60,8 +60,14 @@ mod tests {
                 stt_provider: "local".into(),
                 stt_model: "mock".into(),
                 language: "en".into(),
-                llm_base_url: "https://example.com/v1".into(),
-                llm_model: "gpt-4o-mini".into(),
+                llm_provider_kind: "gemini".into(),
+                llm_base_url: "https://example.com/v1beta".into(),
+                llm_model: "gemini-3-flash-preview".into(),
+                llm_api_kind: "stream_generate_content_sse".into(),
+                llm_preflight_mode: "http_connect".into(),
+                llm_preflight_delay_ms: 2_000,
+                screenshot_max_edge_px: 960,
+                llm_reasoning_effort: Some("medium".into()),
                 microphone_device: None,
                 microphone_device_id: None,
                 history_enabled: true,
@@ -80,7 +86,16 @@ mod tests {
 
         store.save(&cfg).unwrap();
         let loaded = store.load().unwrap();
-        assert_eq!(loaded.defaults.llm_model, "gpt-4o-mini");
+        assert_eq!(loaded.defaults.llm_provider_kind, "gemini");
+        assert_eq!(loaded.defaults.llm_model, "gemini-3-flash-preview");
+        assert_eq!(loaded.defaults.llm_api_kind, "stream_generate_content_sse");
+        assert_eq!(loaded.defaults.llm_preflight_mode, "http_connect");
+        assert_eq!(loaded.defaults.llm_preflight_delay_ms, 2_000);
+        assert_eq!(loaded.defaults.screenshot_max_edge_px, 960);
+        assert_eq!(
+            loaded.defaults.llm_reasoning_effort.as_deref(),
+            Some("medium")
+        );
         assert_eq!(loaded.prompts.len(), 1);
     }
 }

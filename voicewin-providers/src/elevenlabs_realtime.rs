@@ -757,7 +757,10 @@ mod tests {
         let url = build_realtime_ws_url(&cfg).unwrap();
         let qp: std::collections::HashMap<String, String> =
             url.query_pairs().into_owned().collect();
-        assert_eq!(qp.get("model_id").map(|s| s.as_str()), Some("scribe_v2_realtime"));
+        assert_eq!(
+            qp.get("model_id").map(|s| s.as_str()),
+            Some("scribe_v2_realtime")
+        );
     }
 
     #[test]
@@ -1063,8 +1066,7 @@ mod tests {
                         tokio::time::sleep(Duration::from_millis(700)).await;
                         let _ = ws
                             .send(Message::Text(
-                                r#"{"message_type":"committed_transcript","text":"tail"}"#
-                                    .into(),
+                                r#"{"message_type":"committed_transcript","text":"tail"}"#.into(),
                             ))
                             .await;
                         break;
@@ -1074,8 +1076,7 @@ mod tests {
                         sent_hello = true;
                         let _ = ws
                             .send(Message::Text(
-                                r#"{"message_type":"committed_transcript","text":"hello"}"#
-                                    .into(),
+                                r#"{"message_type":"committed_transcript","text":"hello"}"#.into(),
                             ))
                             .await;
                     }
@@ -1110,7 +1111,10 @@ mod tests {
 
         // Finalize must include late stop-time committed text.
         let out = handle.finalize().await.unwrap();
-        assert!(out.contains("tail"), "finalize output missing late tail: {out:?}");
+        assert!(
+            out.contains("tail"),
+            "finalize output missing late tail: {out:?}"
+        );
 
         handle.shutdown().await;
     }

@@ -9,3 +9,6 @@ rustflags = ["-C", "target-feature=+crt-static"]
 [env]
 CMAKE_POLICY_DEFAULT_CMP0091 = "NEW"
 CMAKE_MSVC_RUNTIME_LIBRARY = "MultiThreaded"
+# whisper-rs-sys bindgen currently generates invalid layout assertions on this
+# Linux environment. Force the crate to use its bundled bindings instead.
+WHISPER_DONT_GENERATE_BINDINGS = "1"

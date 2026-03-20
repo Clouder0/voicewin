@@ -188,6 +188,9 @@ mod tests {
             .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
             .collect();
 
-        assert_eq!(samples, vec![-32767, -32767, -16384, 0, 16384, 32767, 32767]);
+        assert_eq!(
+            samples,
+            vec![-32767, -32767, -16384, 0, 16384, 32767, 32767]
+        );
     }
 }

@@ -195,6 +195,12 @@
           "markdownDescription": "Enables the clear_elevenlabs_api_key command without any pre-configured scope."
         },
         {
+          "description": "Enables the clear_gemini_api_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-clear-gemini-api-key",
+          "markdownDescription": "Enables the clear_gemini_api_key command without any pre-configured scope."
+        },
+        {
           "description": "Enables the clear_history command without any pre-configured scope.",
           "type": "string",
           "const": "allow-clear-history",
@@ -211,6 +217,12 @@
           "type": "string",
           "const": "allow-delete-history-entry",
           "markdownDescription": "Enables the delete_history_entry command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_history_entry_by_id command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-history-entry-by-id",
+          "markdownDescription": "Enables the delete_history_entry_by_id command without any pre-configured scope."
         },
         {
           "description": "Enables the download_model command without any pre-configured scope.",
@@ -321,6 +333,12 @@
           "markdownDescription": "Enables the overlay_set_size command without any pre-configured scope."
         },
         {
+          "description": "Enables the preview_prompt command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-prompt",
+          "markdownDescription": "Enables the preview_prompt command without any pre-configured scope."
+        },
+        {
           "description": "Enables the prompt_macos_accessibility_permission command without any pre-configured scope.",
           "type": "string",
           "const": "allow-prompt-macos-accessibility-permission",
@@ -343,6 +361,12 @@
           "type": "string",
           "const": "allow-set-elevenlabs-api-key",
           "markdownDescription": "Enables the set_elevenlabs_api_key command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_gemini_api_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-gemini-api-key",
+          "markdownDescription": "Enables the set_gemini_api_key command without any pre-configured scope."
         },
         {
           "description": "Enables the set_openai_api_key command without any pre-configured scope.",

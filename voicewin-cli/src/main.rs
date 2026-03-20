@@ -29,6 +29,9 @@ impl AppContextProvider for DummyContextProvider {
             selected_text: None,
             window_context: Some("Application: Slack\nActive Window: Daily standup".into()),
             custom_vocabulary: Some("VoiceInk, ElevenLabs, Power Mode".into()),
+            screenshot: None,
+            screenshot_metadata: None,
+            precomputed_screen_ocr: None,
         })
     }
 }
@@ -68,17 +71,22 @@ struct OpenAiCompatibleLlm;
 impl LlmProvider for OpenAiCompatibleLlm {
     async fn enhance(
         &self,
+        _provider_kind: &str,
+        _api_kind: &str,
         base_url: &str,
         api_key: &str,
         model: &str,
+        _reasoning_effort: Option<&str>,
         system_message: &str,
         user_message: &str,
+        _attached_image: Option<&voicewin_core::context::ImageArtifact>,
     ) -> anyhow::Result<EnhancedText> {
         // Build request using our provider module and call it.
         let cfg = OpenAiCompatibleChatConfig {
             base_url: base_url.to_string(),
             api_key: api_key.to_string(),
             model: model.to_string(),
+            reasoning_effort: _reasoning_effort.map(ToOwned::to_owned),
         };
 
         let messages = vec![
@@ -107,6 +115,9 @@ impl LlmProvider for OpenAiCompatibleLlm {
             text,
             provider: "openai-compatible".into(),
             model: model.into(),
+            first_token_ms: None,
+            input_tokens: None,
+            cached_input_tokens: None,
         })
     }
 }
@@ -119,7 +130,12 @@ async fn main() -> anyhow::Result<()> {
     let llm_api_key = std::env::var("LLM_API_KEY").unwrap_or_default();
     let llm_base_url =
         std::env::var("LLM_BASE_URL").unwrap_or_else(|_| "http://localhost:11434/v1".into());
-    let llm_model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into());
+    let llm_model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-5.4".into());
+    let llm_api_kind = std::env::var("LLM_API_KIND").unwrap_or_else(|_| "responses_sse".into());
+    let llm_reasoning_effort = std::env::var("LLM_REASONING_EFFORT")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
 
     let defaults = GlobalDefaults {
         enable_enhancement: !llm_api_key.trim().is_empty(),
@@ -128,8 +144,14 @@ async fn main() -> anyhow::Result<()> {
         stt_provider: "local".into(),
         stt_model: "mock".into(),
         language: "en".into(),
+        llm_provider_kind: "openai_compatible".into(),
         llm_base_url,
         llm_model,
+        llm_api_kind,
+        llm_preflight_mode: "off".into(),
+        llm_preflight_delay_ms: 1_500,
+        screenshot_max_edge_px: 1_280,
+        llm_reasoning_effort,
         microphone_device: None,
         microphone_device_id: None,
         history_enabled: true,
@@ -161,7 +183,8 @@ async fn main() -> anyhow::Result<()> {
         defaults,
         profiles: vec![profile],
         prompts,
-        llm_api_key,
+        openai_api_key: llm_api_key,
+        gemini_api_key: String::new(),
     };
 
     let engine = VoicewinEngine::new(

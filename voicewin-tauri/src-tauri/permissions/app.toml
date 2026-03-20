@@ -15,6 +15,11 @@ description = "Enables the set_config command without any pre-configured scope."
 commands.allow = ["set_config"]
 
 [[permission]]
+identifier = "allow-preview-prompt"
+description = "Enables the preview_prompt command without any pre-configured scope."
+commands.allow = ["preview_prompt"]
+
+[[permission]]
 identifier = "allow-toggle-recording"
 description = "Enables the toggle_recording command without any pre-configured scope."
 commands.allow = ["toggle_recording"]
@@ -55,6 +60,11 @@ description = "Enables the delete_history_entry command without any pre-configur
 commands.allow = ["delete_history_entry"]
 
 [[permission]]
+identifier = "allow-delete-history-entry-by-id"
+description = "Enables the delete_history_entry_by_id command without any pre-configured scope."
+commands.allow = ["delete_history_entry_by_id"]
+
+[[permission]]
 identifier = "allow-get-provider-status"
 description = "Enables the get_provider_status command without any pre-configured scope."
 commands.allow = ["get_provider_status"]
@@ -68,6 +78,16 @@ commands.allow = ["set_openai_api_key"]
 identifier = "allow-clear-openai-api-key"
 description = "Enables the clear_openai_api_key command without any pre-configured scope."
 commands.allow = ["clear_openai_api_key"]
+
+[[permission]]
+identifier = "allow-set-gemini-api-key"
+description = "Enables the set_gemini_api_key command without any pre-configured scope."
+commands.allow = ["set_gemini_api_key"]
+
+[[permission]]
+identifier = "allow-clear-gemini-api-key"
+description = "Enables the clear_gemini_api_key command without any pre-configured scope."
+commands.allow = ["clear_gemini_api_key"]
 
 [[permission]]
 identifier = "allow-set-elevenlabs-api-key"

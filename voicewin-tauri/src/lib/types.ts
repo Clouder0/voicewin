@@ -1,10 +1,46 @@
+export type VisualContextMode = 'off' | 'auto' | 'screenshot' | 'ocr';
+export type VisualCaptureScope = 'display' | 'foreground_window';
+export type VisualContextDispatch = 'off' | 'screenshot' | 'ocr';
+export type ScreenOcrSource = 'inline' | 'prepared';
+export type PlatformName = 'windows' | 'macos' | 'linux' | 'unknown';
+
+export type PlatformCapabilities = {
+  platform: PlatformName;
+  foreground_app_identity: boolean;
+  clipboard_context: boolean;
+  selected_text_context: boolean;
+  window_context: boolean;
+  screenshot_capture: boolean;
+  foreground_window_capture: boolean;
+  auto_insert: boolean;
+};
+
+export type VisualContextRuntime = {
+  mode: VisualContextMode;
+  capture_scope: VisualCaptureScope;
+  capture_actual_scope?: VisualCaptureScope | null;
+  dispatch: VisualContextDispatch;
+  screenshot_capture_elapsed_ms?: number | null;
+  capture_fallback_reason?: string | null;
+  screen_ocr_source?: ScreenOcrSource | null;
+  screen_ocr_elapsed_ms?: number | null;
+  screen_ocr_first_token_ms?: number | null;
+  screen_ocr_text_chars?: number | null;
+};
+
 export type ContextToggles = {
   use_clipboard: boolean;
   use_selected_text: boolean;
   use_window_context: boolean;
   use_custom_vocabulary: boolean;
-  use_ocr: boolean;
+  visual_context_mode: VisualContextMode;
+  visual_capture_scope: VisualCaptureScope;
 };
+
+export type LlmProviderKind = 'openai_compatible' | 'gemini';
+export type LlmApiKind = 'chat_completions' | 'responses_sse' | 'stream_generate_content_sse';
+export type LlmPreflightMode = 'off' | 'http_connect';
+export type LlmReasoningEffort = 'minimal' | 'low' | 'medium' | 'high';
 
 export type GlobalDefaults = {
   enable_enhancement: boolean;
@@ -13,8 +49,14 @@ export type GlobalDefaults = {
   stt_provider: string;
   stt_model: string;
   language: string;
+  llm_provider_kind: string;
   llm_base_url: string;
   llm_model: string;
+  llm_api_kind: string;
+  llm_preflight_mode: string;
+  llm_preflight_delay_ms: number;
+  screenshot_max_edge_px: number;
+  llm_reasoning_effort?: string | null;
   microphone_device?: string | null;
   microphone_device_id?: string | null;
   history_enabled: boolean;
@@ -27,6 +69,13 @@ export type PromptTemplate = {
   mode: 'Enhancer' | 'Assistant';
   prompt_text: string;
   trigger_words: string[];
+};
+
+export type PromptPreviewContextOverride = {
+  clipboard?: string | null;
+  selected_text?: string | null;
+  window_context?: string | null;
+  screenshot_data_url?: string | null;
 };
 
 // Rust serializes `AppMatcher` as an externally tagged enum.
@@ -44,8 +93,12 @@ export type PowerModeOverridesWire = {
   stt_provider?: string;
   stt_model?: string;
   language?: string;
+  llm_provider_kind?: string;
   llm_base_url?: string;
   llm_model?: string;
+  llm_api_kind?: string;
+  llm_preflight_mode?: string;
+  llm_reasoning_effort?: string;
   context?: Partial<ContextToggles>;
 };
 
@@ -69,8 +122,12 @@ export type PowerModeOverrides = {
   stt_provider?: string | null;
   stt_model?: string | null;
   language?: string | null;
+  llm_provider_kind?: string | null;
   llm_base_url?: string | null;
   llm_model?: string | null;
+  llm_api_kind?: string | null;
+  llm_preflight_mode?: string | null;
+  llm_reasoning_effort?: string | null;
   context?: Partial<ContextToggles> | null;
 };
 
@@ -96,8 +153,45 @@ export type HistoryEntry = {
   app_exe_path?: string | null;
   app_window_title?: string | null;
   text: string;
+  raw_transcript?: string | null;
+  enhanced_text?: string | null;
+  prompt_id?: string | null;
+  prompt_title?: string | null;
+  matched_profile_name?: string | null;
+  detected_trigger_word?: string | null;
+  stt_provider?: string | null;
+  stt_model?: string | null;
+  llm_provider?: string | null;
+  llm_model?: string | null;
+  transcription_ms?: number | null;
+  enhancement_ms?: number | null;
+  enhancement_first_token_ms?: number | null;
+  enhancement_input_tokens?: number | null;
+  enhancement_cached_input_tokens?: number | null;
+  context_flags?: ContextToggles | null;
+  visual_context_runtime?: VisualContextRuntime | null;
   stage: string;
+  warning?: string | null;
   error?: string | null;
+};
+
+export type PromptPreviewResponse = {
+  elapsed_ms: number;
+  first_token_ms?: number | null;
+  input_tokens?: number | null;
+  cached_input_tokens?: number | null;
+  visual_context_runtime?: VisualContextRuntime | null;
+  app_process_name?: string | null;
+  app_window_title?: string | null;
+  matched_profile_name?: string | null;
+  provider_kind: string;
+  api_kind: string;
+  model: string;
+  system_message: string;
+  user_message: string;
+  raw_output: string;
+  final_output: string;
+  warning?: string | null;
 };
 
 export function decodeAppMatcherWire(m: AppMatcherWire): AppMatcher {
@@ -130,8 +224,12 @@ export function decodePowerModeProfile(p: PowerModeProfileWire): PowerModeProfil
       stt_provider: p.overrides.stt_provider ?? null,
       stt_model: p.overrides.stt_model ?? null,
       language: p.overrides.language ?? null,
+      llm_provider_kind: p.overrides.llm_provider_kind ?? null,
       llm_base_url: p.overrides.llm_base_url ?? null,
       llm_model: p.overrides.llm_model ?? null,
+      llm_api_kind: p.overrides.llm_api_kind ?? null,
+      llm_preflight_mode: p.overrides.llm_preflight_mode ?? null,
+      llm_reasoning_effort: p.overrides.llm_reasoning_effort ?? null,
       context: p.overrides.context ?? null,
     },
   };
@@ -150,8 +248,12 @@ export function encodePowerModeProfile(p: PowerModeProfile): PowerModeProfileWir
       stt_provider: p.overrides.stt_provider ?? undefined,
       stt_model: p.overrides.stt_model ?? undefined,
       language: p.overrides.language ?? undefined,
+      llm_provider_kind: p.overrides.llm_provider_kind ?? undefined,
       llm_base_url: p.overrides.llm_base_url ?? undefined,
       llm_model: p.overrides.llm_model ?? undefined,
+      llm_api_kind: p.overrides.llm_api_kind ?? undefined,
+      llm_preflight_mode: p.overrides.llm_preflight_mode ?? undefined,
+      llm_reasoning_effort: p.overrides.llm_reasoning_effort ?? undefined,
       context: p.overrides.context ?? undefined,
     },
   };
@@ -160,6 +262,33 @@ export function encodePowerModeProfile(p: PowerModeProfile): PowerModeProfileWir
 export type ProviderStatus = {
   openai_api_key_present: boolean;
   openai_api_key_error?: string | null;
+  gemini_api_key_present: boolean;
+  gemini_api_key_error?: string | null;
   elevenlabs_api_key_present: boolean;
   elevenlabs_api_key_error?: string | null;
+};
+
+export type ProviderProbeKind = 'smoke' | 'screenshot_product_name';
+
+export type ProviderProbeRequest = {
+  provider_kind: string;
+  api_kind: string;
+  base_url: string;
+  model: string;
+  reasoning_effort?: string | null;
+  probe_kind?: ProviderProbeKind;
+};
+
+export type ProviderProbeResponse = {
+  probe_kind: ProviderProbeKind;
+  elapsed_ms: number;
+  first_token_ms?: number | null;
+  input_tokens?: number | null;
+  cached_input_tokens?: number | null;
+  provider_kind: string;
+  api_kind: string;
+  model: string;
+  expected_output: string;
+  final_output: string;
+  warning?: string | null;
 };

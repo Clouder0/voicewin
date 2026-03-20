@@ -17,8 +17,62 @@ pub struct HistoryEntry {
     // The final text the user can recover/copy.
     pub text: String,
 
+    #[serde(default)]
+    pub raw_transcript: Option<String>,
+
+    #[serde(default)]
+    pub enhanced_text: Option<String>,
+
+    #[serde(default)]
+    pub prompt_id: Option<String>,
+
+    #[serde(default)]
+    pub prompt_title: Option<String>,
+
+    #[serde(default)]
+    pub matched_profile_name: Option<String>,
+
+    #[serde(default)]
+    pub detected_trigger_word: Option<String>,
+
+    #[serde(default)]
+    pub stt_provider: Option<String>,
+
+    #[serde(default)]
+    pub stt_model: Option<String>,
+
+    #[serde(default)]
+    pub llm_provider: Option<String>,
+
+    #[serde(default)]
+    pub llm_model: Option<String>,
+
+    #[serde(default)]
+    pub transcription_ms: Option<u64>,
+
+    #[serde(default)]
+    pub enhancement_ms: Option<u64>,
+
+    #[serde(default)]
+    pub enhancement_first_token_ms: Option<u64>,
+
+    #[serde(default)]
+    pub enhancement_input_tokens: Option<u64>,
+
+    #[serde(default)]
+    pub enhancement_cached_input_tokens: Option<u64>,
+
+    #[serde(default)]
+    pub context_flags: Option<voicewin_core::context::ContextToggles>,
+
+    #[serde(default)]
+    pub visual_context_runtime: Option<voicewin_core::llm::VisualContextRuntime>,
+
     // UI hint (e.g. "done", "error", "transcribing").
     pub stage: String,
+
+    #[serde(default)]
+    pub warning: Option<String>,
 
     // Optional error message if the session failed.
     #[serde(default)]
@@ -202,47 +256,45 @@ fn normalize_entry_ids(entries: &mut [HistoryEntry]) -> bool {
 mod tests {
     use super::*;
 
+    fn test_entry(ts_unix_ms: i64, text: &str, stage: &str) -> HistoryEntry {
+        HistoryEntry {
+            id: String::new(),
+            ts_unix_ms,
+            app_process_name: None,
+            app_exe_path: None,
+            app_window_title: None,
+            text: text.into(),
+            raw_transcript: None,
+            enhanced_text: None,
+            prompt_id: None,
+            prompt_title: None,
+            matched_profile_name: None,
+            detected_trigger_word: None,
+            stt_provider: None,
+            stt_model: None,
+            llm_provider: None,
+            llm_model: None,
+            transcription_ms: None,
+            enhancement_ms: None,
+            enhancement_first_token_ms: None,
+            enhancement_input_tokens: None,
+            enhancement_cached_input_tokens: None,
+            context_flags: None,
+            visual_context_runtime: None,
+            stage: stage.into(),
+            warning: None,
+            error: None,
+        }
+    }
+
     #[test]
     fn appends_and_limits_entries() {
         let dir = tempfile::tempdir().unwrap();
         let store = HistoryStore::at_path(dir.path().join("history.json")).with_max_entries(2);
 
-        store
-            .append(HistoryEntry {
-                id: String::new(),
-                ts_unix_ms: 1,
-                app_process_name: None,
-                app_exe_path: None,
-                app_window_title: None,
-                text: "a".into(),
-                stage: "done".into(),
-                error: None,
-            })
-            .unwrap();
-        store
-            .append(HistoryEntry {
-                id: String::new(),
-                ts_unix_ms: 2,
-                app_process_name: None,
-                app_exe_path: None,
-                app_window_title: None,
-                text: "b".into(),
-                stage: "done".into(),
-                error: None,
-            })
-            .unwrap();
-        store
-            .append(HistoryEntry {
-                id: String::new(),
-                ts_unix_ms: 3,
-                app_process_name: None,
-                app_exe_path: None,
-                app_window_title: None,
-                text: "c".into(),
-                stage: "done".into(),
-                error: None,
-            })
-            .unwrap();
+        store.append(test_entry(1, "a", "done")).unwrap();
+        store.append(test_entry(2, "b", "done")).unwrap();
+        store.append(test_entry(3, "c", "done")).unwrap();
 
         let entries = store.load().unwrap();
         assert_eq!(entries.len(), 2);
@@ -283,18 +335,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = HistoryStore::at_path(dir.path().join("history.json"));
 
-        store
-            .append(HistoryEntry {
-                id: String::new(),
-                ts_unix_ms: 100,
-                app_process_name: None,
-                app_exe_path: None,
-                app_window_title: None,
-                text: String::new(),
-                stage: "error".into(),
-                error: Some("boom".into()),
-            })
-            .unwrap();
+        let mut entry = test_entry(100, "", "error");
+        entry.error = Some("boom".into());
+        store.append(entry).unwrap();
 
         let entries = store.load().unwrap();
         assert_eq!(entries.len(), 1);

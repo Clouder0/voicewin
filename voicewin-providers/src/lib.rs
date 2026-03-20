@@ -1,6 +1,10 @@
+pub mod data_url;
 pub mod elevenlabs;
 pub mod elevenlabs_realtime;
+pub mod gemini;
 pub mod openai_compatible;
+pub mod openai_responses;
 pub mod parse;
 pub mod request;
 pub mod runtime;
+pub mod sse;

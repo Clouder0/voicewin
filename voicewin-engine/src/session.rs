@@ -1,6 +1,7 @@
 use crate::traits::{ContextSnapshot, EnhancedText, Transcript};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use voicewin_core::llm::VisualContextRuntime;
 use voicewin_core::power_mode::EffectiveConfig;
 use voicewin_core::types::{AppIdentity, InsertMode};
 
@@ -18,6 +19,7 @@ pub enum SessionStage {
 pub struct SessionTimings {
     pub transcription_ms: Option<u64>,
     pub enhancement_ms: Option<u64>,
+    pub enhancement_first_token_ms: Option<u64>,
 }
 
 impl Default for SessionTimings {
@@ -25,6 +27,7 @@ impl Default for SessionTimings {
         Self {
             transcription_ms: None,
             enhancement_ms: None,
+            enhancement_first_token_ms: None,
         }
     }
 }
@@ -41,6 +44,9 @@ pub struct SessionResult {
     pub config: EffectiveConfig,
     pub transcript: Option<Transcript>,
     pub enhanced: Option<EnhancedText>,
+    pub prompt_id: Option<String>,
+    pub prompt_title: Option<String>,
+    pub detected_trigger_word: Option<String>,
 
     // The best final text we have, even if insertion fails.
     pub final_text: Option<String>,
@@ -48,6 +54,8 @@ pub struct SessionResult {
     pub insert_mode: InsertMode,
     pub context: ContextSnapshot,
     pub timings: SessionTimings,
+    pub visual_context: VisualContextRuntime,
+    pub warning: Option<String>,
     pub error: Option<String>,
 }
 
@@ -66,10 +74,15 @@ impl SessionResult {
             config,
             transcript: None,
             enhanced: None,
+            prompt_id: None,
+            prompt_title: None,
+            detected_trigger_word: None,
             final_text: Some(final_text),
             insert_mode: mode,
             context: ctx,
             timings: SessionTimings::default(),
+            visual_context: VisualContextRuntime::default(),
+            warning: None,
             error: None,
         }
     }
@@ -88,12 +101,31 @@ impl SessionResult {
             config,
             transcript: None,
             enhanced: None,
+            prompt_id: None,
+            prompt_title: None,
+            detected_trigger_word: None,
             final_text: None,
             insert_mode,
             context: ctx,
             timings: SessionTimings::default(),
+            visual_context: VisualContextRuntime::default(),
+            warning: None,
             error: Some(error.into()),
         }
+    }
+
+    pub fn push_warning(&mut self, warning: impl AsRef<str>) {
+        let warning = warning.as_ref().trim();
+        if warning.is_empty() {
+            return;
+        }
+
+        self.warning = match self.warning.take() {
+            Some(existing) if !existing.trim().is_empty() => {
+                Some(format!("{existing} | {warning}"))
+            }
+            _ => Some(warning.to_string()),
+        };
     }
 }
 
