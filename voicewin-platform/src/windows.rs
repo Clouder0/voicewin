@@ -16,14 +16,14 @@ use voicewin_engine::traits::{
 };
 
 use clipboard_win::get_clipboard_string;
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
     DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, HBITMAP, HDC, HGDIOBJ, ReleaseDC,
     SRCCOPY, SelectObject,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetSystemMetrics, GetWindowRect, RECT, SM_CXSCREEN, SM_CYSCREEN,
+    GetForegroundWindow, GetSystemMetrics, GetWindowRect, SM_CXSCREEN, SM_CYSCREEN,
 };
 
 #[path = "windows_insert.rs"]
@@ -91,7 +91,7 @@ fn read_selected_text() -> anyhow::Result<Option<String>> {
             ..Default::default()
         };
 
-        if !windows::Win32::UI::WindowsAndMessaging::GetGUIThreadInfo(0, &mut gui).as_bool() {
+        if windows::Win32::UI::WindowsAndMessaging::GetGUIThreadInfo(0, &mut gui).is_err() {
             return Ok(None);
         }
 
@@ -109,8 +109,8 @@ fn read_selected_text() -> anyhow::Result<Option<String>> {
         windows::Win32::UI::WindowsAndMessaging::SendMessageW(
             hwnd,
             EM_GETSEL,
-            WPARAM((&mut selection_start as *mut u32) as usize),
-            LPARAM((&mut selection_end as *mut u32) as isize),
+            Some(WPARAM((&mut selection_start as *mut u32) as usize)),
+            Some(LPARAM((&mut selection_end as *mut u32) as isize)),
         );
         if selection_end <= selection_start {
             return Ok(None);
@@ -119,8 +119,8 @@ fn read_selected_text() -> anyhow::Result<Option<String>> {
         let text_len = windows::Win32::UI::WindowsAndMessaging::SendMessageW(
             hwnd,
             WM_GETTEXTLENGTH,
-            WPARAM(0),
-            LPARAM(0),
+            Some(WPARAM(0)),
+            Some(LPARAM(0)),
         )
         .0 as usize;
         if text_len == 0 {
@@ -131,8 +131,8 @@ fn read_selected_text() -> anyhow::Result<Option<String>> {
         let copied = windows::Win32::UI::WindowsAndMessaging::SendMessageW(
             hwnd,
             WM_GETTEXT,
-            WPARAM(text.len()),
-            LPARAM(text.as_mut_ptr() as isize),
+            Some(WPARAM(text.len())),
+            Some(LPARAM(text.as_mut_ptr() as isize)),
         )
         .0 as usize;
         if copied == 0 {
@@ -174,12 +174,13 @@ fn get_class_name(hwnd: HWND) -> anyhow::Result<String> {
 fn capture_windows_screenshot(
     options: ScreenshotCaptureOptions,
 ) -> anyhow::Result<Option<CapturedScreenshot>> {
+    let (screen_width, screen_height) = screen_metrics();
     match options.scope {
         VisualCaptureScope::Display => capture_screen_region_screenshot(
             0,
             0,
-            GetSystemMetrics(SM_CXSCREEN),
-            GetSystemMetrics(SM_CYSCREEN),
+            screen_width,
+            screen_height,
             options,
             "display",
             None,
@@ -194,14 +195,15 @@ fn capture_foreground_window_screenshot(
     unsafe {
         let hwnd = GetForegroundWindow();
         if hwnd.0.is_null() {
+            let (screen_width, screen_height) = screen_metrics();
             log::debug!(
                 "windows screenshot capture: requested_scope=foreground_window fallback_scope=display reason=no_foreground_window"
             );
             return capture_screen_region_screenshot(
                 0,
                 0,
-                GetSystemMetrics(SM_CXSCREEN),
-                GetSystemMetrics(SM_CYSCREEN),
+                screen_width,
+                screen_height,
                 options,
                 "display_fallback",
                 Some("no_foreground_window"),
@@ -209,15 +211,16 @@ fn capture_foreground_window_screenshot(
         }
 
         let mut rect = RECT::default();
-        if !GetWindowRect(hwnd, &mut rect).as_bool() {
+        if GetWindowRect(hwnd, &mut rect).is_err() {
+            let (screen_width, screen_height) = screen_metrics();
             log::debug!(
                 "windows screenshot capture: requested_scope=foreground_window fallback_scope=display reason=get_window_rect_failed"
             );
             return capture_screen_region_screenshot(
                 0,
                 0,
-                GetSystemMetrics(SM_CXSCREEN),
-                GetSystemMetrics(SM_CYSCREEN),
+                screen_width,
+                screen_height,
                 options,
                 "display_fallback",
                 Some("get_window_rect_failed"),
@@ -382,6 +385,10 @@ fn capture_screen_region_screenshot(
             },
         }))
     }
+}
+
+fn screen_metrics() -> (i32, i32) {
+    unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) }
 }
 
 struct ScreenDc(HDC);
