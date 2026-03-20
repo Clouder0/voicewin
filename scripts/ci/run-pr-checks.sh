@@ -22,6 +22,11 @@ if [ -z "${CARGO_HOME:-}" ]; then
   fi
 fi
 
+if [ "$(uname -s)" = "Linux" ] && [ -z "${WHISPER_DONT_GENERATE_BINDINGS:-}" ]; then
+  export WHISPER_DONT_GENERATE_BINDINGS=1
+  echo "run-pr-checks: Linux whisper-rs-sys workaround enabled (WHISPER_DONT_GENERATE_BINDINGS=1)"
+fi
+
 cargo test --locked
 cargo test --locked --manifest-path voicewin-tauri/src-tauri/Cargo.toml
 

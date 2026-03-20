@@ -23,7 +23,7 @@ fallback path:
 
 That fallback is enough to unblock this environment.
 
-## Repo-Level Fix
+## Initial Repo-Level Fix
 
 Set this in workspace cargo config:
 
@@ -36,7 +36,27 @@ Implemented in:
 
 - `/.cargo/config.toml`
 
-This makes normal workspace builds use bundled bindings instead of machine-local bindgen output.
+This makes workspace builds use bundled bindings instead of machine-local bindgen output.
+
+## Windows Follow-up
+
+On 2026-03-20, native Windows CI showed that the bundled `whisper-rs-sys` bindings are Linux-flavored
+and fail on Windows with layout assertion overflows in `_G_fpos_t`, `_G_fpos64_t`, and `_IO_FILE`.
+
+That means the original global Cargo-config approach was too broad. Cargo accepts target-scoped
+`env` entries in `cargo config get`, but still warns that they are unused during real builds, so
+that path was not reliable.
+
+The fix was moved out of repo-global Cargo config and into Linux-only execution paths instead:
+
+- remove `WHISPER_DONT_GENERATE_BINDINGS` from `/.cargo/config.toml`
+- set it explicitly in Linux verification scripts (currently `scripts/ci/run-pr-checks.sh`)
+- let native Windows builds use upstream bindgen behavior
+
+Result:
+
+- Linux scripted verification keeps the local-build workaround
+- native Windows builds fall back to bindgen, which is what upstream expects there
 
 ## Verification
 

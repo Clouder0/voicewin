@@ -14,6 +14,33 @@ This pass covered:
 
 ## Findings
 
+### 0. Validation-branch reruns exposed two native-only blockers after the initial freeze
+
+After freezing the feature batch into `rc/2026-03-20-llm-post-processing`, native reruns on that
+exact branch head exposed two additional platform-specific issues:
+
+- Windows `23340656260` failed in `Rust workspace tests`
+  - root cause: repo-global `WHISPER_DONT_GENERATE_BINDINGS=1` forced `whisper-rs-sys` to use
+    Linux-generated bundled bindings on native Windows
+  - symptom: layout assertion overflows in `_G_fpos_t`, `_G_fpos64_t`, and `_IO_FILE`
+  - fix: remove the repo-global Cargo config override and apply the workaround only in Linux
+    verification paths (`scripts/ci/run-pr-checks.sh`)
+
+- macOS `23340656266` failed in `Build Tauri app (unsigned macOS bundle)`
+  - root cause: `voicewin-platform/src/macos_insert.rs` linked against
+    `kAXFocusedUIElementAttribute` / `kAXSelectedTextAttribute` as exported globals
+  - symptom: native arm64 link failure with undefined Accessibility symbols
+  - fix: use the documented CFString values directly (`"AXFocusedUIElement"` /
+    `"AXSelectedText"`) instead of relying on non-linkable globals
+
+Local verification after the Windows-side config change:
+
+- `cargo clean -p whisper-rs-sys`
+- `cargo clean -p whisper-rs-sys --manifest-path voicewin-tauri/src-tauri/Cargo.toml`
+- `bash scripts/ci/run-pr-checks.sh`
+
+All passed locally from a clean `whisper-rs-sys` rebuild on Linux.
+
 ### 1. The full local release gate is green
 
 `scripts/ci/run-pr-checks.sh` now passes locally.

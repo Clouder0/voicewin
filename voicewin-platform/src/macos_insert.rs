@@ -56,8 +56,6 @@ unsafe extern "C" {
         value: *mut CFTypeRef,
     ) -> i32;
     static kAXTrustedCheckOptionPrompt: *const AnyObject;
-    static kAXFocusedUIElementAttribute: CFStringRef;
-    static kAXSelectedTextAttribute: CFStringRef;
 }
 
 #[link(name = "Carbon", kind = "framework")]
@@ -220,9 +218,17 @@ fn read_selected_text_impl() -> Option<String> {
         return None;
     }
 
+    // `kAXFocusedUIElementAttribute` / `kAXSelectedTextAttribute` are not
+    // exported as linkable symbols on native macOS arm64 builds. Use their
+    // documented CFString values directly instead of relying on the C globals.
+    let focused_attr = CFString::from_static_string("AXFocusedUIElement");
     let mut focused_value: CFTypeRef = std::ptr::null();
     let focused_status = unsafe {
-        AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute, &mut focused_value)
+        AXUIElementCopyAttributeValue(
+            system,
+            focused_attr.as_concrete_TypeRef(),
+            &mut focused_value,
+        )
     };
     unsafe {
         CFRelease(system.cast());
@@ -232,9 +238,14 @@ fn read_selected_text_impl() -> Option<String> {
     }
 
     let focused = focused_value.cast::<c_void>();
+    let selected_attr = CFString::from_static_string("AXSelectedText");
     let mut selected_value: CFTypeRef = std::ptr::null();
     let selected_status = unsafe {
-        AXUIElementCopyAttributeValue(focused, kAXSelectedTextAttribute, &mut selected_value)
+        AXUIElementCopyAttributeValue(
+            focused,
+            selected_attr.as_concrete_TypeRef(),
+            &mut selected_value,
+        )
     };
     unsafe {
         CFRelease(focused_value);
