@@ -33,11 +33,19 @@ exact branch head exposed two additional platform-specific issues:
   - fix: use the documented CFString values directly (`"AXFocusedUIElement"` /
     `"AXSelectedText"`) instead of relying on non-linkable globals
 
+- macOS `23341454053` then failed in `Run packaged runtime smoke`
+  - root cause: foreground-app verification sampled too early and observed VoiceWin instead of
+    the refocused TextEdit target
+  - symptom: runtime smoke output reached `stage=capture_foreground` then failed with
+    `reason=foreground_mismatch`
+  - fix: retry foreground capture for a bounded window before declaring mismatch
+
 Local verification after the Windows-side config change:
 
 - `cargo clean -p whisper-rs-sys`
 - `cargo clean -p whisper-rs-sys --manifest-path voicewin-tauri/src-tauri/Cargo.toml`
 - `bash scripts/ci/run-pr-checks.sh`
+- `env WHISPER_DONT_GENERATE_BINDINGS=1 cargo test --locked --manifest-path voicewin-tauri/src-tauri/Cargo.toml runtime_smoke`
 
 All passed locally from a clean `whisper-rs-sys` rebuild on Linux.
 

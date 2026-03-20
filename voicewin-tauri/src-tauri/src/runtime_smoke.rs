@@ -18,6 +18,10 @@ pub(crate) const RUNTIME_SMOKE_TRANSCRIPT_ENV: &str = "VOICEWIN_RUNTIME_SMOKE_TR
 pub(crate) const RUNTIME_SMOKE_EXPECT_PROCESS_ENV: &str = "VOICEWIN_RUNTIME_SMOKE_EXPECT_PROCESS";
 pub(crate) const RUNTIME_SMOKE_REFOCUS_DELAY: std::time::Duration =
     std::time::Duration::from_millis(300);
+pub(crate) const RUNTIME_SMOKE_FOREGROUND_MATCH_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(2);
+pub(crate) const RUNTIME_SMOKE_FOREGROUND_POLL_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(100);
 pub(crate) const RUNTIME_SMOKE_STAGE_REFOCUS_DELAY: &str = "refocus_delay";
 pub(crate) const RUNTIME_SMOKE_STAGE_BUILD_SERVICE: &str = "build_service";
 pub(crate) const RUNTIME_SMOKE_STAGE_CAPTURE_FOREGROUND: &str = "capture_foreground";
@@ -279,6 +283,12 @@ mod tests {
     #[test]
     fn runtime_smoke_refocus_delay_is_short_and_fixed() {
         assert_eq!(RUNTIME_SMOKE_REFOCUS_DELAY.as_millis(), 300);
+    }
+
+    #[test]
+    fn runtime_smoke_foreground_retry_budget_is_bounded_and_non_zero() {
+        assert_eq!(RUNTIME_SMOKE_FOREGROUND_MATCH_TIMEOUT.as_secs(), 2);
+        assert_eq!(RUNTIME_SMOKE_FOREGROUND_POLL_INTERVAL.as_millis(), 100);
     }
 
     #[test]

@@ -2008,6 +2008,45 @@ fn request_smoke_process_exit(handle: tauri::AppHandle, exit_code: i32) {
     });
 }
 
+async fn capture_runtime_smoke_foreground_until_match(
+    svc: &AppService,
+    expected_process_name: Option<&str>,
+) -> Result<(Option<String>, bool), anyhow::Error> {
+    let deadline =
+        std::time::Instant::now() + runtime_smoke::RUNTIME_SMOKE_FOREGROUND_MATCH_TIMEOUT;
+    let first_foreground = svc.get_foreground_app().await?;
+    let mut last_actual_process_name = first_foreground
+        .process_name
+        .as_ref()
+        .map(|name| name.0.clone());
+
+    if runtime_smoke::foreground_process_matches(
+        last_actual_process_name.as_deref(),
+        expected_process_name,
+    ) {
+        return Ok((last_actual_process_name, true));
+    }
+
+    loop {
+        let foreground = svc.get_foreground_app().await?;
+        let actual_process_name = foreground.process_name.as_ref().map(|name| name.0.clone());
+
+        if runtime_smoke::foreground_process_matches(
+            actual_process_name.as_deref(),
+            expected_process_name,
+        ) {
+            return Ok((actual_process_name, true));
+        }
+
+        last_actual_process_name = actual_process_name;
+        if std::time::Instant::now() >= deadline {
+            return Ok((last_actual_process_name, false));
+        }
+
+        tokio::time::sleep(runtime_smoke::RUNTIME_SMOKE_FOREGROUND_POLL_INTERVAL).await;
+    }
+}
+
 async fn run_runtime_smoke(
     app: tauri::AppHandle,
     smoke_mode: Result<runtime_smoke::RuntimeSmokeMode, String>,
@@ -2048,8 +2087,13 @@ async fn run_runtime_smoke(
             &smoke_mode.stage_marker(runtime_smoke::RUNTIME_SMOKE_STAGE_CAPTURE_FOREGROUND),
         );
 
-        let foreground = match svc.get_foreground_app().await {
-            Ok(foreground) => foreground,
+        let (actual_process_name, matched) = match capture_runtime_smoke_foreground_until_match(
+            &svc,
+            smoke_mode.expected_foreground_process.as_deref(),
+        )
+        .await
+        {
+            Ok(result) => result,
             Err(error) => {
                 log::error!("runtime smoke foreground capture failed: {error}");
                 emit_runtime_smoke_process_output(&smoke_mode.failure_marker("foreground_capture"));
@@ -2057,14 +2101,11 @@ async fn run_runtime_smoke(
             }
         };
 
-        let actual_process_name = foreground.process_name.as_ref().map(|name| name.0.as_str());
-        if !runtime_smoke::foreground_process_matches(
-            actual_process_name,
-            smoke_mode.expected_foreground_process.as_deref(),
-        ) {
+        if !matched {
             log::error!(
-                "runtime smoke foreground mismatch: expected={:?} actual={actual_process_name:?}",
+                "runtime smoke foreground mismatch after retry window: expected={:?} actual={:?}",
                 smoke_mode.expected_foreground_process.as_deref(),
+                actual_process_name.as_deref(),
             );
             emit_runtime_smoke_process_output(&smoke_mode.failure_marker("foreground_mismatch"));
             return 1;
